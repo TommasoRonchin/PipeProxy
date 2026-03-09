@@ -102,3 +102,52 @@ curl -U admin:securepassword123 -x http://YOUR_VPS_IP:3128 https://api.ipify.org
 - **Backpressure Handling:** The client tracks TCP buffer saturation. If a single destination socket fills beyond 5MB of high-watermark, the specific stream is gracefully terminated without affecting the rest of the tunnel.
 - **Proxy Authentication:** Fully standard `Proxy-Authorization` header parsing implemented natively at the TCP packet level.
 - **Zero-JSON Transport:** To maximize throughput, the system encodes routing metadata into a minimal `[ Type(1B) | ConnectionID(4B) | PayloadLength(4B) ]` binary buffer on top of the WebSocket payloads.
+
+---
+
+## 🛡️ Hardening Security (WSS / HTTPS)
+
+By default, the tunnel runs on `ws://` (unencrypted WebSocket). While the `TUNNEL_SECRET` prevents unauthorized access, **the token itself and your proxy traffic travel in plaintext** and can be intercepted by anyone sniffing the network (e.g. your ISP or a public WiFi).
+
+To make the tunnel **100% secure and uninterceptable**, you must use **WSS (WebSocket Secure)**. 
+We strongly recommend placing the VPS Tunnel Server behind a Reverse Proxy like **Nginx** or **Caddy** with a free SSL certificate from Let's Encrypt.
+
+### How to Secure with Nginx:
+
+1. Point a domain (e.g., `proxy.yourdomain.com`) to your VPS IP.
+2. Install Nginx and Certbot on your VPS.
+3. Add this configuration to Nginx to terminate SSL and forward traffic to PipeProxy's tunnel port (`8080`):
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name proxy.yourdomain.com;
+
+    ssl_certificate /etc/letsencrypt/live/proxy.yourdomain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/proxy.yourdomain.com/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "Upgrade";
+        proxy_set_header Host $host;
+        # Pass the custom authentication header
+        proxy_set_header x-tunnel-secret $http_x_tunnel_secret;
+
+        # Keep alive long-lived WebSocket streams (e.g. 24 hours instead of Nginx's default 60s)
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+        
+        # Disable buffering to minimize latency for raw TCP streams
+        proxy_buffering off;
+    }
+}
+```
+
+4. Once Nginx is running, update your Client's (Raspberry Pi) `.env` file to use the secure protocol:
+   ```env
+   SERVER_URL=wss://proxy.yourdomain.com
+   ```
+
+With this setup, the handshake, the `TUNNEL_SECRET`, and all multiplexed TCP packets are encrypted with military-grade TLS before they ever leave your Raspberry Pi!

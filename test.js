@@ -41,9 +41,8 @@ clientProcess.stderr.on('data', (data) => console.error('[Client Error]', data.t
 // Utility to run curl
 function runCurl(url) {
     return new Promise((resolve, reject) => {
-        // Using curl.exe directly to avoid PowerShell Invoke-WebRequest aliasing if run differently,
-        // though child_process.exec runs in cmd.exe where 'curl' is the native curl.exe usually.
-        const cmd = `curl -s -x ${PROXY_URL} ${url}`;
+        // Authenticated curl proxy request
+        const cmd = `curl -s -U admin:securepassword123 -x ${PROXY_URL} ${url}`;
         exec(cmd, (error, stdout, stderr) => {
             if (error) {
                 reject(error);

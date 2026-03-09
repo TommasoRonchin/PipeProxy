@@ -7,6 +7,23 @@ const PROXY_PORT = process.env.PORT || 3128;
 const TUNNEL_PORT = process.env.TUNNEL_PORT || 8080;
 const TUNNEL_SECRET = process.env.TUNNEL_SECRET;
 
+const PROXY_AUTH_USERNAME = process.env.PROXY_AUTH_USERNAME;
+const PROXY_AUTH_PASSWORD = process.env.PROXY_AUTH_PASSWORD;
+const ENABLE_PROXY_AUTH = process.env.ENABLE_PROXY_AUTH === 'true';
+
+function validateAuth(headerText) {
+    if (!ENABLE_PROXY_AUTH) return true; // Auth explicitly disabled
+    if (!PROXY_AUTH_USERNAME || !PROXY_AUTH_PASSWORD) return true; // Missing credentials disables auth fallback
+
+    const match = headerText.match(/Proxy-Authorization:\s*Basic\s+([^\r\n]+)/i);
+    if (!match) return false;
+
+    const credentials = Buffer.from(match[1], 'base64').toString('utf8');
+    const [username, password] = credentials.split(':');
+
+    return username === PROXY_AUTH_USERNAME && password === PROXY_AUTH_PASSWORD;
+}
+
 const tunnelServer = new TunnelServer({ port: TUNNEL_PORT, secret: TUNNEL_SECRET });
 tunnelServer.start();
 
@@ -34,6 +51,13 @@ const proxyServer = net.createServer((socket) => {
             socket.removeListener('data', onData);
 
             const headerText = headerBuffer.subarray(0, headerEndIdx).toString('utf8');
+
+            // Perform Proxy Authentication
+            if (!validateAuth(headerText)) {
+                socket.end('HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm="PipeProxy"\r\n\r\n');
+                return;
+            }
+
             const lines = headerText.split('\r\n');
             const reqLine = lines[0];
 

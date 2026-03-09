@@ -100,6 +100,7 @@ curl -U admin:securepassword123 -x http://YOUR_VPS_IP:3128 https://api.ipify.org
 ## 🛠️ Advanced Features
 
 - **Backpressure Handling:** The client tracks TCP buffer saturation. If a single destination socket fills beyond 5MB of high-watermark, the specific stream is gracefully terminated without affecting the rest of the tunnel.
+- **OOM Protection:** The built-in frame decoder protects against memory exhaustion attacks by strictly enforcing a `MAX_FRAME_SIZE` (default 10MB) on multiplexed payloads.
 - **Proxy Authentication:** Fully standard `Proxy-Authorization` header parsing implemented natively at the TCP packet level.
 - **Zero-JSON Transport:** To maximize throughput, the system encodes routing metadata into a minimal `[ Type(1B) | ConnectionID(4B) | PayloadLength(4B) ]` binary buffer on top of the WebSocket payloads.
 
@@ -154,8 +155,8 @@ With this setup, the handshake, the `TUNNEL_SECRET`, and all multiplexed TCP pac
 
 ---
 
-### Alternative: Native AES-256 Encryption (Zero Dependencies)
-If you do not want to set up an external reverse proxy (Nginx or domains), PipeProxy includes a built-in zero-dependency AES-256-CTR streaming cypher layer natively.
+### Alternative: Native AES-256-GCM Encryption (Zero Dependencies)
+If you do not want to set up an external reverse proxy (Nginx or domains), PipeProxy includes a built-in zero-dependency AES-256-GCM streaming cypher layer natively. This mode validates payload integrity to prevent bit-flipping attacks.
 
 By enabling this in your `.env` files:
 ```env

@@ -8,6 +8,10 @@ class FrameDecoder extends EventEmitter {
     constructor() {
         super();
         this.buffer = Buffer.alloc(0);
+
+        // Configurable Maximum Frame Size to prevent OOM DOS attacks
+        const envMax = parseInt(process.env.MAX_FRAME_SIZE, 10);
+        this.maxFrameSize = isNaN(envMax) ? (10 * 1024 * 1024) : envMax; // Default 10MB
     }
 
     /**
@@ -26,6 +30,13 @@ class FrameDecoder extends EventEmitter {
             const type = this.buffer.readUInt8(0);
             const connectionId = this.buffer.readUInt32BE(1);
             const length = this.buffer.readUInt32BE(5);
+
+            // Prevent OOM Attacks
+            if (length > this.maxFrameSize) {
+                this.emit('error', new Error(`Frame too large: ${length} bytes exceeds maximum allowed of ${this.maxFrameSize} bytes.`));
+                this.buffer = Buffer.alloc(0); // clear buffer to prevent further parsing attempts on corrupt data
+                return;
+            }
 
             const totalFrameLength = 9 + length;
 

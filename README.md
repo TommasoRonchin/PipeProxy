@@ -102,8 +102,9 @@ curl -U admin:securepassword123 -x http://YOUR_VPS_IP:3128 https://api.ipify.org
 - **Backpressure Handling:** The client tracks TCP buffer saturation. If a single destination socket fills beyond the `MAX_SOCKET_BUFFER_MB` (default 1MB) high-watermark, the specific stream is gracefully terminated without affecting the rest of the tunnel.
 - **SSRF Protection:** The client natively prevents Server-Side Request Forgery by blocking incoming connection requests attempting to reach local IP ranges (`127.0.0.0/8`, `192.168.*`, `10.*`, etc.), protecting your home/corporate network.
 - **OOM Protection (Tunnel):** The built-in frame decoder protects against memory exhaustion attacks by strictly enforcing a `MAX_FRAME_SIZE` (default 10MB) on multiplexed payloads.
-- **OOM Protection (Proxy):** The proxy server strictly verifies headers avoiding infinite Slowloris buffer leaks via the `MAX_PROXY_HEADER_SIZE` setting.
+- **OOM Protection (Proxy):** The proxy server strictly verifies headers avoiding infinite Slowloris buffer leaks via the `MAX_PROXY_HEADER_SIZE` (default 8KB) and `MAX_PROXY_TIMEOUT_MS` (default 10s) settings.
 - **Proxy Authentication:** Fully standard `Proxy-Authorization` header parsing implemented natively at the TCP packet level.
+- **Hostname Validation:** The client enforces a `MAX_HOSTNAME_SIZE` (default 2KB) to prevent memory exhaustion from maliciously long target addresses.
 - **Zero-JSON Transport:** To maximize throughput, the system encodes routing metadata into a minimal `[ Type(1B) | ConnectionID(4B) | PayloadLength(4B) ]` binary buffer on top of the WebSocket payloads.
 
 ---
@@ -116,7 +117,7 @@ By default, the tunnel secret would be transmitted in plaintext if you use a sim
 ### 2. Secure Proxy Node Endpoint (Native TLS/HTTPS)
 
 If you enable proxy authentication (`ENABLE_PROXY_AUTH`), the generic basic-auth credentials `PROXY_AUTH_USERNAME/PASSWORD` would normally transmit in plaintext HTTP. To encrypt the proxy node connection fully, you can enable native TLS directly in Node.js by setting `ENABLE_TLS_PROXY=true` on the VPS along with paths to your `.pem` files.
-This converts your proxy server into a Secure HTTPS Proxy, ensuring nobody can intercept your proxy credentials.
+This converts your proxy server into a Secure HTTPS Proxy, ensuring nobody can intercept your proxy credentials. This is configured via `ENABLE_TLS_PROXY=true`, `TLS_CERT_PATH`, and `TLS_KEY_PATH`.
 
 ### 3. WSS / HTTPS (Recommended for Production Tunnel)
 

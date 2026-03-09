@@ -81,6 +81,11 @@ class TunnelServer extends EventEmitter {
             this.activeWs = ws;
             const decoder = new FrameDecoder();
 
+            decoder.on('error', (err) => {
+                console.error(`[TunnelServer] Decoder error: ${err.message}`);
+                ws.close(1008, 'Frame decoder error');
+            });
+
             ws.on('message', (data) => {
                 try {
                     const decrypted = decryptMessage(data);

@@ -25,6 +25,11 @@ class ConnectionManager {
 
         // Wire the decoder output to handle individual logic frames
         this.decoder.on('frame', (frame) => this.handleFrame(frame));
+
+        this.decoder.on('error', (err) => {
+            console.error(`[ConnectionManager] Decoder error: ${err.message}`);
+            this.ws.close(1008, 'Frame decoder error');
+        });
     }
 
     handleMessage(data) {
@@ -156,7 +161,16 @@ class ConnectionManager {
                 }
             } else if (this.pendingConnections.has(connectionId)) {
                 // Buffer early data until DNS/connect completes
-                this.pendingConnections.get(connectionId).push(payload);
+                const queue = this.pendingConnections.get(connectionId);
+                queue.push(payload);
+
+                // Prevent OOM: if the queued data exceeds the max socket buffer size
+                const totalQueuedSize = queue.reduce((acc, buf) => acc + (buf ? buf.length : 0), 0);
+                if (totalQueuedSize > this.maxSocketBuffer) {
+                    console.warn(`[ConnectionManager] Destroying connection ${connectionId} due to massive early data buffer during DNS resolution.`);
+                    this.sendFrame(TYPES.CLOSE, connectionId);
+                    this.pendingConnections.delete(connectionId);
+                }
             } else {
                 // Drop extra data and tell remote that we are closed.
                 this.sendFrame(TYPES.CLOSE, connectionId);

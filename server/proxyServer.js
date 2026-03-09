@@ -24,6 +24,7 @@ const TLS_CERT_PATH = process.env.TLS_CERT_PATH;
 const TLS_KEY_PATH = process.env.TLS_KEY_PATH;
 
 const MAX_PROXY_HEADER_SIZE = process.env.MAX_PROXY_HEADER_SIZE ? parseInt(process.env.MAX_PROXY_HEADER_SIZE, 10) : 8192;
+const MAX_PROXY_TIMEOUT_MS = process.env.MAX_PROXY_TIMEOUT_MS ? parseInt(process.env.MAX_PROXY_TIMEOUT_MS, 10) : 10000;
 
 function validateAuth(headerText) {
     if (!ENABLE_PROXY_AUTH) return true; // Auth explicitly disabled
@@ -49,6 +50,9 @@ tunnelServer.start();
 const protocol = new FrameProtocol(tunnelServer);
 
 const proxyConnectionHandler = (socket) => {
+    // Handle socket errors globally for this connection to prevent unhandled exceptions
+    socket.on('error', () => { /* ignore */ });
+
     if (!tunnelServer.isReady()) {
         socket.end('HTTP/1.1 502 Bad Gateway\r\n\r\nTunnel not connected\n');
         return;
@@ -57,6 +61,15 @@ const proxyConnectionHandler = (socket) => {
     // Pre-authentication/parsing state
     let headerBuffer = Buffer.alloc(0);
     let resolved = false;
+
+    // Slowloris Connection Exhaustion Protection
+    socket.setTimeout(MAX_PROXY_TIMEOUT_MS);
+    socket.once('timeout', () => {
+        if (!resolved) {
+            socket.end('HTTP/1.1 408 Request Timeout\r\n\r\n');
+            socket.destroy();
+        }
+    });
 
     const onData = (chunk) => {
         if (resolved) return;
@@ -74,6 +87,7 @@ const proxyConnectionHandler = (socket) => {
         const headerEndIdx = headerBuffer.indexOf('\r\n\r\n');
         if (headerEndIdx !== -1) {
             resolved = true;
+            socket.setTimeout(0); // clear timeout once headers are parsed
             socket.removeListener('data', onData);
 
             const headerText = headerBuffer.subarray(0, headerEndIdx).toString('utf8');
@@ -147,9 +161,6 @@ const proxyConnectionHandler = (socket) => {
     };
 
     socket.on('data', onData);
-
-    // Handled errors gracefully during pre-resolution
-    socket.on('error', () => { /* ignore */ });
 };
 
 // Start Proxy Server (TLS or Plain TCP)

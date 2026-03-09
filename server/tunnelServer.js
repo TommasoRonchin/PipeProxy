@@ -3,6 +3,7 @@ const { EventEmitter } = require('events');
 const FrameDecoder = require('../shared/frameDecoder');
 const { encodeFrame } = require('../shared/frameEncoder');
 const { encryptMessage, decryptMessage } = require('../shared/cryptoStream');
+const crypto = require('crypto');
 
 class TunnelServer extends EventEmitter {
     constructor(options = {}) {
@@ -13,6 +14,11 @@ class TunnelServer extends EventEmitter {
         this.wss = null;
         this.isAlive = false;
         this.pingInterval = null;
+
+        this.secureHandshake = process.env.ENABLE_SECURE_HANDSHAKE === 'true';
+        this.usedNonces = new Set();
+        // Clear used nonces periodically to prevent memory leaks from the replay cache
+        setInterval(() => this.usedNonces.clear(), 5 * 60 * 1000);
     }
 
     start() {
@@ -20,12 +26,48 @@ class TunnelServer extends EventEmitter {
         console.log(`[TunnelServer] Listening for Raspberry Pi on port ${this.port}`);
 
         this.wss.on('connection', (ws, req) => {
-            // Basic authentication
-            const authHeader = req.headers['x-tunnel-secret'];
-            if (this.secret && authHeader !== this.secret) {
-                console.warn(`[TunnelServer] Rejected connection from ${req.socket.remoteAddress}: Invalid secret`);
-                ws.close(1008, 'Unauthorized');
-                return;
+            // Authentication
+            if (this.secret) {
+                if (this.secureHandshake) {
+                    const timestamp = req.headers['x-tunnel-timestamp'];
+                    const nonce = req.headers['x-tunnel-nonce'];
+                    const signature = req.headers['x-tunnel-signature'];
+
+                    if (!timestamp || !nonce || !signature) {
+                        console.warn(`[TunnelServer] Rejected: Missing secure handshake headers`);
+                        ws.close(1008, 'Unauthorized');
+                        return;
+                    }
+
+                    // Allow 5 minutes of clock drift between Client and Server
+                    if (Math.abs(Date.now() - parseInt(timestamp, 10)) > 5 * 60 * 1000) {
+                        console.warn(`[TunnelServer] Rejected: Timestamp drift too large`);
+                        ws.close(1008, 'Unauthorized');
+                        return;
+                    }
+
+                    if (this.usedNonces.has(nonce)) {
+                        console.warn(`[TunnelServer] Rejected: Replay attack detected`);
+                        ws.close(1008, 'Unauthorized');
+                        return;
+                    }
+
+                    const expectedSignature = crypto.createHmac('sha256', this.secret).update(timestamp + nonce).digest('hex');
+                    if (signature !== expectedSignature) {
+                        console.warn(`[TunnelServer] Rejected: Invalid signature`);
+                        ws.close(1008, 'Unauthorized');
+                        return;
+                    }
+
+                    this.usedNonces.add(nonce);
+                } else {
+                    const authHeader = req.headers['x-tunnel-secret'];
+                    if (authHeader !== this.secret) {
+                        console.warn(`[TunnelServer] Rejected connection from ${req.socket.remoteAddress}: Invalid secret`);
+                        ws.close(1008, 'Unauthorized');
+                        return;
+                    }
+                }
             }
 
             console.log(`[TunnelServer] Raspberry Pi connected from ${req.socket.remoteAddress}`);

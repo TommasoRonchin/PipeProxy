@@ -99,18 +99,23 @@ curl -U admin:securepassword123 -x http://YOUR_VPS_IP:3128 https://api.ipify.org
 
 ## 🛠️ Advanced Features
 
-- **Backpressure Handling:** The client tracks TCP buffer saturation. If a single destination socket fills beyond 5MB of high-watermark, the specific stream is gracefully terminated without affecting the rest of the tunnel.
-- **OOM Protection:** The built-in frame decoder protects against memory exhaustion attacks by strictly enforcing a `MAX_FRAME_SIZE` (default 10MB) on multiplexed payloads.
+- **Backpressure Handling:** The client tracks TCP buffer saturation. If a single destination socket fills beyond the `MAX_SOCKET_BUFFER_MB` (default 1MB) high-watermark, the specific stream is gracefully terminated without affecting the rest of the tunnel.
+- **OOM Protection (Tunnel):** The built-in frame decoder protects against memory exhaustion attacks by strictly enforcing a `MAX_FRAME_SIZE` (default 10MB) on multiplexed payloads.
+- **OOM Protection (Proxy):** The proxy server strictly verifies headers avoiding infinite Slowloris buffer leaks via the `MAX_PROXY_HEADER_SIZE` setting.
 - **Proxy Authentication:** Fully standard `Proxy-Authorization` header parsing implemented natively at the TCP packet level.
 - **Zero-JSON Transport:** To maximize throughput, the system encodes routing metadata into a minimal `[ Type(1B) | ConnectionID(4B) | PayloadLength(4B) ]` binary buffer on top of the WebSocket payloads.
 
 ---
 
-## 🛡️ Hardening Security (WSS / HTTPS)
+## 🛡️ Hardening Security
 
-By default, the tunnel runs on `ws://` (unencrypted WebSocket). While the `TUNNEL_SECRET` prevents unauthorized access, **the token itself and your proxy traffic travel in plaintext** and can be intercepted by anyone sniffing the network (e.g. your ISP or a public WiFi).
+### 1. Secure Handshake (HMAC Challenge-Response)
+By default, the tunnel secret would be transmitted in plaintext if you use a simple `ws://` connection. To prevent sniffing on local networks, PipeProxy uses a cryptographic Challenge-Response handshake to securely log in without ever sending the `TUNNEL_SECRET` over the wire. This is controlled by the `ENABLE_SECURE_HANDSHAKE=true` flag.
 
-To make the tunnel **100% secure and uninterceptable**, you must use **WSS (WebSocket Secure)**. 
+### 2. WSS / HTTPS (Recommended for Production)
+
+Even with a secure handshake, if `ENABLE_ENCRYPTION` is false, your proxy traffic (the websites you visit) will travel in plaintext over `ws://`. 
+To make the tunnel **100% secure and uninterceptable**, you should either enable Native AES Encryption or use **WSS (WebSocket Secure)**. 
 We strongly recommend placing the VPS Tunnel Server behind a Reverse Proxy like **Nginx** or **Caddy** with a free SSL certificate from Let's Encrypt.
 
 ### How to Secure with Nginx:

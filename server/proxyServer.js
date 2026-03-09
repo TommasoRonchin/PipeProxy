@@ -16,6 +16,8 @@ const PROXY_AUTH_USERNAME = process.env.PROXY_AUTH_USERNAME;
 const PROXY_AUTH_PASSWORD = process.env.PROXY_AUTH_PASSWORD;
 const ENABLE_PROXY_AUTH = process.env.ENABLE_PROXY_AUTH === 'true';
 
+const MAX_PROXY_HEADER_SIZE = process.env.MAX_PROXY_HEADER_SIZE ? parseInt(process.env.MAX_PROXY_HEADER_SIZE, 10) : 8192;
+
 function validateAuth(headerText) {
     if (!ENABLE_PROXY_AUTH) return true; // Auth explicitly disabled
     if (!PROXY_AUTH_USERNAME || !PROXY_AUTH_PASSWORD) return true; // Missing credentials disables auth fallback
@@ -48,6 +50,13 @@ const proxyServer = net.createServer((socket) => {
         if (resolved) return;
 
         headerBuffer = Buffer.concat([headerBuffer, chunk]);
+
+        // Slowloris OOM Protection
+        if (headerBuffer.length > MAX_PROXY_HEADER_SIZE) {
+            socket.end('HTTP/1.1 431 Request Header Fields Too Large\r\n\r\n');
+            socket.destroy();
+            return;
+        }
 
         // Look for end of HTTP headers
         const headerEndIdx = headerBuffer.indexOf('\r\n\r\n');

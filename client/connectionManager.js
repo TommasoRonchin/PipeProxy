@@ -12,6 +12,9 @@ class ConnectionManager {
         const enableLimits = process.env.ENABLE_MAX_CONNECTIONS === 'true';
         this.maxConnections = enableLimits ? parseInt(process.env.MAX_CONNECTIONS || '2000', 10) : Infinity;
 
+        const envMaxBuffer = parseInt(process.env.MAX_SOCKET_BUFFER_MB, 10);
+        this.maxSocketBuffer = isNaN(envMaxBuffer) ? (1 * 1024 * 1024) : (envMaxBuffer * 1024 * 1024);
+
         // Wire the decoder output to handle individual logic frames
         this.decoder.on('frame', (frame) => this.handleFrame(frame));
     }
@@ -85,7 +88,7 @@ class ConnectionManager {
                     // on one slow connection, allowing other streams to continue flowing smoothly while
                     // Node handles backpressure natively by buffering in memory up to `highWaterMark`.
                     // We can optionally destroy the socket if its buffer becomes absurdly large:
-                    if (socket.writableLength > 5 * 1024 * 1024) { // 5MB buffer limit per socket
+                    if (socket.writableLength > this.maxSocketBuffer) { // Buffer limit per socket
                         console.warn(`[ConnectionManager] Destroying socket ${connectionId} due to massive backpressure buffer.`);
                         this.sendFrame(TYPES.CLOSE, connectionId);
                         socket.destroy();

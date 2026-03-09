@@ -22,8 +22,17 @@ class TunnelServer extends EventEmitter {
     }
 
     start() {
-        this.wss = new WebSocketServer({ port: this.port });
-        console.log(`[TunnelServer] Listening for Raspberry Pi on port ${this.port}`);
+        try {
+            this.wss = new WebSocketServer({ port: this.port });
+            console.log(`[TunnelServer] Listening for Raspberry Pi on port ${this.port}`);
+
+            this.wss.on('error', (err) => {
+                console.error(`[TunnelServer] WSS Error: ${err.message}`);
+            });
+        } catch (err) {
+            console.error(`[TunnelServer] Failed to start server: ${err.message}`);
+            throw err; // Re-throw to be caught by proxyServer.js
+        }
 
         this.wss.on('connection', (ws, req) => {
             // Authentication

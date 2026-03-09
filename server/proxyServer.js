@@ -44,19 +44,14 @@ function validateAuth(headerText) {
     return username === PROXY_AUTH_USERNAME && password === PROXY_AUTH_PASSWORD;
 }
 
-const tunnelServer = new TunnelServer({ port: TUNNEL_PORT, secret: TUNNEL_SECRET });
-tunnelServer.start();
-
-const protocol = new FrameProtocol(tunnelServer);
 
 const proxyConnectionHandler = (socket) => {
     // Handle socket errors globally for this connection to prevent unhandled exceptions
-    socket.on('error', () => { /* ignore */ });
+    socket.on('error', (err) => {
+        console.error(`[ProxyServer] Socket error: ${err.message}`);
+        socket.destroy();
+    });
 
-    if (!tunnelServer.isReady()) {
-        socket.end('HTTP/1.1 502 Bad Gateway\r\n\r\nTunnel not connected\n');
-        return;
-    }
 
     // Pre-authentication/parsing state
     let headerBuffer = Buffer.alloc(0);
@@ -66,6 +61,7 @@ const proxyConnectionHandler = (socket) => {
     socket.setTimeout(MAX_PROXY_TIMEOUT_MS);
     socket.once('timeout', () => {
         if (!resolved) {
+            console.warn(`[ProxyServer] Connection timed out during header parsing`);
             socket.end('HTTP/1.1 408 Request Timeout\r\n\r\n');
             socket.destroy();
         }
@@ -94,7 +90,9 @@ const proxyConnectionHandler = (socket) => {
 
             // Perform Proxy Authentication
             if (!validateAuth(headerText)) {
+                console.warn(`[ProxyServer] Authentication failed for a request`);
                 socket.end('HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm="PipeProxy"\r\n\r\n');
+                setImmediate(() => socket.destroy());
                 return;
             }
 
@@ -104,7 +102,9 @@ const proxyConnectionHandler = (socket) => {
             // Parse request line: e.g. "CONNECT google.com:443 HTTP/1.1" or "GET http://example.com/ HTTP/1.1"
             const match = reqLine.match(/^([A-Z]+)\s+([^\s]+)\s+HTTP/);
             if (!match) {
+                console.warn(`[ProxyServer] Malformed request line: ${reqLine}`);
                 socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
+                setImmediate(() => socket.destroy());
                 return;
             }
 
@@ -125,13 +125,23 @@ const proxyConnectionHandler = (socket) => {
                     host = urlObj.hostname;
                     port = urlObj.port ? parseInt(urlObj.port, 10) : 80;
                 } catch (err) {
+                    console.warn(`[ProxyServer] Failed to parse URL: ${target}`);
                     socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
+                    setImmediate(() => socket.destroy());
                     return;
                 }
             }
 
             if (!host) {
                 socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
+                setImmediate(() => socket.destroy());
+                return;
+            }
+
+            // Check tunnel readiness ONLY when we are actually ready to proxy
+            if (!tunnelServer.isReady()) {
+                socket.end('HTTP/1.1 502 Bad Gateway\r\n\r\nTunnel not connected\n');
+                setImmediate(() => socket.destroy());
                 return;
             }
 
@@ -163,10 +173,17 @@ const proxyConnectionHandler = (socket) => {
     socket.on('data', onData);
 };
 
-// Start Proxy Server (TLS or Plain TCP)
+// 1. Initialize logic components and check configuration
+const tunnelServer = new TunnelServer({ port: TUNNEL_PORT, secret: TUNNEL_SECRET });
+const protocol = new FrameProtocol(tunnelServer);
+
+// 2. Prepare the Proxy Server (TLS or Plain TCP)
 let proxyServer;
-if (ENABLE_TLS_PROXY && TLS_CERT_PATH && TLS_KEY_PATH) {
+if (ENABLE_TLS_PROXY) {
     try {
+        if (!TLS_CERT_PATH || !TLS_KEY_PATH) {
+            throw new Error("TLS_CERT_PATH or TLS_KEY_PATH is not defined");
+        }
         const options = {
             key: fs.readFileSync(TLS_KEY_PATH),
             cert: fs.readFileSync(TLS_CERT_PATH)
@@ -174,12 +191,21 @@ if (ENABLE_TLS_PROXY && TLS_CERT_PATH && TLS_KEY_PATH) {
         proxyServer = tls.createServer(options, proxyConnectionHandler);
         console.log(`[ProxyServer] TLS/HTTPS enabled for Proxy port ${PROXY_PORT}`);
     } catch (err) {
-        console.error(`[ProxyServer] Failed to start TLS server: ${err.message}`);
+        console.error(`[ProxyServer] CRITICAL: Failed to start TLS server: ${err.message}`);
+        console.error(`[ProxyServer] Exiting because ENABLE_TLS_PROXY is set but TLS could not be initialized.`);
         process.exit(1);
     }
 } else {
     proxyServer = net.createServer(proxyConnectionHandler);
     console.log(`[ProxyServer] Plain TCP HTTP Proxy enabled (No TLS) for port ${PROXY_PORT}`);
+}
+
+// 3. Start components
+try {
+    tunnelServer.start();
+} catch (err) {
+    console.error(`[ProxyServer] CRITICAL: Failed to start Tunnel Server: ${err.message}`);
+    process.exit(1);
 }
 
 proxyServer.listen(PROXY_PORT, () => {

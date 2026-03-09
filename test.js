@@ -7,9 +7,9 @@ const PROXY_PORT = 3128;
 const PROXY_URL = `http://${PROXY_HOST}:${PROXY_PORT}`;
 
 // Utility to run curl
-function runCurl(url) {
+function runCurl(url, auth = 'admin:Sup3r:P@ssword:!') {
     return new Promise((resolve, reject) => {
-        const cmd = `curl -s -o /dev/null -w "%{time_total}" -U admin:securepassword123 -x ${PROXY_URL} ${url}`;
+        const cmd = `curl -s -o /dev/null -w "%{time_total}" -U ${auth} -x ${PROXY_URL} ${url}`;
         exec(cmd, (error, stdout, stderr) => {
             if (error) {
                 resolve(0); // On error during benchmark, return 0 instead of crashing the whole suite
@@ -19,12 +19,13 @@ function runCurl(url) {
         });
     });
 }
-function runCurlCheck(url) {
+function runCurlCheck(url, auth = 'admin:Sup3r:P@ssword:!') {
     return new Promise((resolve, reject) => {
-        const cmd = `curl -s -U admin:securepassword123 -x ${PROXY_URL} ${url}`;
+        // use --max-time 5 to prevent infinite hanging if proxy drops connection (e.g., SSRF)
+        const cmd = `curl -s --max-time 5 -U ${auth} -x ${PROXY_URL} ${url}`;
         exec(cmd, (error, stdout, stderr) => {
             if (error) {
-                reject(error);
+                resolve("ERROR_TIMEOUT_OR_DROP"); // For SSRF we expect it to drop
                 return;
             }
             resolve(stdout.trim());
@@ -41,8 +42,24 @@ async function runPass(encryptionEnabled, encryptionSecret = 'test_enc_key') {
     console.log(`🚀 RUNNING TEST PASS (Encryption: ${encryptionEnabled ? 'ON 🔒' : 'OFF 🔓'})`);
     console.log(`======================================================\n`);
 
-    const serverEnv = { ...process.env, PORT: PROXY_PORT, TUNNEL_PORT: 8080, TUNNEL_SECRET: 'test_secret' };
-    const clientEnv = { ...process.env, SERVER_URL: 'ws://127.0.0.1:8080', TUNNEL_SECRET: 'test_secret' };
+    const serverEnv = {
+        ...process.env,
+        PORT: PROXY_PORT,
+        TUNNEL_PORT: 8080,
+        TUNNEL_SECRET: 'test_secret',
+        ENABLE_PROXY_AUTH: 'true',
+        PROXY_AUTH_USERNAME: 'admin',
+        PROXY_AUTH_PASSWORD: 'Sup3r:P@ssword:!', // Testing complex password
+        ENABLE_SECURE_HANDSHAKE: 'true', // Testing secure HMAC
+        BLOCK_LOCAL_NETWORK: 'true'
+    };
+    const clientEnv = {
+        ...process.env,
+        SERVER_URL: 'ws://127.0.0.1:8080',
+        TUNNEL_SECRET: 'test_secret',
+        ENABLE_SECURE_HANDSHAKE: 'true',
+        BLOCK_LOCAL_NETWORK: 'true'
+    };
 
     if (encryptionEnabled) {
         serverEnv.ENABLE_ENCRYPTION = 'true';
@@ -82,7 +99,7 @@ async function runPass(encryptionEnabled, encryptionSecret = 'test_enc_key') {
     let totalTime = 0;
 
     try {
-        console.log(`⏳ Test 1: HTTP Verify (http://example.com)`);
+        console.log(`⏳ Test 1: HTTP Verify (http://example.com) with Complex Password`);
         const httpRes = await runCurlCheck('http://example.com');
         if (httpRes.includes('Example Domain')) passed++; else console.error('❌ Failed HTTP Check');
 
@@ -94,7 +111,15 @@ async function runPass(encryptionEnabled, encryptionSecret = 'test_enc_key') {
         const ipRes = await runCurlCheck('https://api.ipify.org');
         if (ipRes && ipRes.includes('.')) passed++; else console.error('❌ Failed Data Integrity Check', ipRes);
 
-        console.log(`⏳ Test 4: Performance Benchmark (5 consecutive requests)`);
+        console.log(`⏳ Test 4: SSRF Protection Attack (http://127.0.0.1:8080)`);
+        const ssrfRes = await runCurlCheck('http://127.0.0.1:8080');
+        if (ssrfRes === "ERROR_TIMEOUT_OR_DROP") {
+            passed++;
+        } else {
+            console.error('❌ Failed SSRF Defense Check: Connection was not blocked!');
+        }
+
+        console.log(`⏳ Test 5: Performance Benchmark (5 consecutive requests)`);
         for (let i = 0; i < 5; i++) {
             totalTime += await runCurl('https://example.com');
         }
@@ -110,7 +135,7 @@ async function runPass(encryptionEnabled, encryptionSecret = 'test_enc_key') {
     clientProcess.kill();
     await delay(1000); // give OS time to free ports
 
-    const allPassed = passed === 4;
+    const allPassed = passed === 5;
     console.log(`\n--- Pass Summary (Encryption: ${encryptionEnabled}) ---`);
     console.log(`Status: ${allPassed ? '✅ SUCCESS' : '❌ FAILED'}`);
 

@@ -151,3 +151,15 @@ server {
    ```
 
 With this setup, the handshake, the `TUNNEL_SECRET`, and all multiplexed TCP packets are encrypted with military-grade TLS before they ever leave your Raspberry Pi!
+
+---
+
+### Alternative: Native AES-256 Encryption (Zero Dependencies)
+If you do not want to set up an external reverse proxy (Nginx or domains), PipeProxy includes a built-in zero-dependency AES-256-CTR streaming cypher layer natively.
+
+By enabling this in your `.env` files:
+```env
+ENABLE_ENCRYPTION=true
+ENCRYPTION_SECRET=some_super_long_custom_random_string
+```
+Every single multiplexed payload will be symmetrically encrypted natively in Node.js before being pushed through the `ws://` pipe. Any Middle-Man sniffing the WebSocket frames will only see random AES garbage bytes. Note: High-throughput connections (e.g. 500Mbps+) might slightly tax the Raspberry Pi CPU compared to kernel-level Nginx TLS.

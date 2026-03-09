@@ -10,7 +10,7 @@ console.log('🔄 Starting end-to-end test for PipeProxy...');
 
 // 1. Start Server
 const serverProcess = spawn('node', [path.join(__dirname, 'server', 'proxyServer.js')], {
-    env: { ...process.env, PORT: PROXY_PORT, TUNNEL_PORT: 8080, TUNNEL_SECRET: 'test_secret' }
+    env: { ...process.env, PORT: PROXY_PORT, TUNNEL_PORT: 8080, TUNNEL_SECRET: 'test_secret', ENABLE_ENCRYPTION: 'true', ENCRYPTION_SECRET: 'test_enc_key' }
 });
 
 let serverReady = false;
@@ -25,7 +25,7 @@ serverProcess.stderr.on('data', (data) => console.error('[Server Error]', data.t
 
 // 2. Start Client
 const clientProcess = spawn('node', [path.join(__dirname, 'client', 'raspberryClient.js')], {
-    env: { ...process.env, SERVER_URL: 'ws://127.0.0.1:8080', TUNNEL_SECRET: 'test_secret' }
+    env: { ...process.env, SERVER_URL: 'ws://127.0.0.1:8080', TUNNEL_SECRET: 'test_secret', ENABLE_ENCRYPTION: 'true', ENCRYPTION_SECRET: 'test_enc_key' }
 });
 
 let clientReady = false;

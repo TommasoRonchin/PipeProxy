@@ -1,6 +1,7 @@
 const net = require('net');
 const FrameDecoder = require('../shared/frameDecoder');
 const { TYPES, encodeFrame } = require('../shared/frameEncoder');
+const { encryptMessage } = require('../shared/cryptoStream');
 
 class ConnectionManager {
     constructor(ws) {
@@ -22,7 +23,9 @@ class ConnectionManager {
 
     sendFrame(type, connId, payload = null) {
         if (this.ws.readyState === 1) { // 1 is WebSocket.OPEN
-            this.ws.send(encodeFrame(type, connId, payload), { binary: true });
+            const frame = encodeFrame(type, connId, payload);
+            const encrypted = encryptMessage(frame);
+            this.ws.send(encrypted, { binary: true });
         }
     }
 

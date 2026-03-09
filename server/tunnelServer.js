@@ -2,6 +2,7 @@ const { WebSocketServer } = require('ws');
 const { EventEmitter } = require('events');
 const FrameDecoder = require('../shared/frameDecoder');
 const { encodeFrame } = require('../shared/frameEncoder');
+const { encryptMessage, decryptMessage } = require('../shared/cryptoStream');
 
 class TunnelServer extends EventEmitter {
     constructor(options = {}) {
@@ -39,7 +40,13 @@ class TunnelServer extends EventEmitter {
             const decoder = new FrameDecoder();
 
             ws.on('message', (data) => {
-                decoder.push(data);
+                try {
+                    const decrypted = decryptMessage(data);
+                    decoder.push(decrypted);
+                } catch (e) {
+                    console.error(`[TunnelServer] Decryption failed, dropping connection: ${e.message}`);
+                    ws.terminate();
+                }
             });
 
             decoder.on('frame', (frame) => {
@@ -90,7 +97,8 @@ class TunnelServer extends EventEmitter {
         }
 
         const frame = encodeFrame(type, connectionId, payload);
-        this.activeWs.send(frame, { binary: true });
+        const encrypted = encryptMessage(frame);
+        this.activeWs.send(encrypted, { binary: true });
         return true;
     }
 

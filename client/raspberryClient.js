@@ -6,6 +6,7 @@ if (fs.existsSync('.env')) {
 }
 const WebSocket = require('ws');
 const ConnectionManager = require('./connectionManager');
+const { decryptMessage } = require('../shared/cryptoStream');
 
 const SERVER_URL = process.env.SERVER_URL || 'ws://localhost:8080';
 const TUNNEL_SECRET = process.env.TUNNEL_SECRET;
@@ -28,7 +29,11 @@ function connect() {
     });
 
     ws.on('message', (data) => {
-        manager.handleMessage(data);
+        try {
+            manager.handleMessage(decryptMessage(data));
+        } catch (e) {
+            console.error(`[RaspberryClient] Decryption failed: ${e.message}`);
+        }
     });
 
     ws.on('close', () => {

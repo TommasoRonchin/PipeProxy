@@ -44,6 +44,7 @@ async function runPass(encryptionEnabled, encryptionSecret = 'test_enc_key') {
 
     const serverEnv = {
         ...process.env,
+        SKIP_DOTENV: 'true',
         PORT: PROXY_PORT,
         TUNNEL_PORT: 8080,
         TUNNEL_SECRET: 'test_secret',
@@ -55,6 +56,7 @@ async function runPass(encryptionEnabled, encryptionSecret = 'test_enc_key') {
     };
     const clientEnv = {
         ...process.env,
+        SKIP_DOTENV: 'true',
         SERVER_URL: 'ws://127.0.0.1:8080',
         TUNNEL_SECRET: 'test_secret',
         ENABLE_SECURE_HANDSHAKE: 'true',

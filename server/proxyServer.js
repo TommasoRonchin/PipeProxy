@@ -1,8 +1,10 @@
 const fs = require('fs');
-if (fs.existsSync('.env')) {
-    require('dotenv').config({ path: '.env' });
-} else {
-    require('dotenv').config({ path: '.env.server' });
+if (process.env.SKIP_DOTENV !== 'true') {
+    if (fs.existsSync('.env')) {
+        require('dotenv').config({ path: '.env' });
+    } else {
+        require('dotenv').config({ path: '.env.server' });
+    }
 }
 const net = require('net');
 const tls = require('tls');
@@ -32,7 +34,6 @@ function validateAuth(headerText) {
 
     const credentials = Buffer.from(match[1], 'base64').toString('utf8');
 
-    // Fix: Properly split credentials even if the password contains colons (':')
     const splitIdx = credentials.indexOf(':');
     if (splitIdx === -1) return false;
 

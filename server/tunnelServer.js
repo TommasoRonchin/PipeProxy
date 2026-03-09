@@ -16,9 +16,9 @@ class TunnelServer extends EventEmitter {
         this.pingInterval = null;
 
         this.secureHandshake = process.env.ENABLE_SECURE_HANDSHAKE === 'true';
-        this.usedNonces = new Set();
-        // Clear used nonces periodically to prevent memory leaks from the replay cache
-        setInterval(() => this.usedNonces.clear(), 5 * 60 * 1000);
+        this.usedNonces = new Map();
+        // Clear used nonces periodically to prevent memory leaks, but only remove expired ones
+        setInterval(() => this.cleanupExpiredNonces(), 60 * 1000); // Check every minute
     }
 
     start() {
@@ -59,7 +59,7 @@ class TunnelServer extends EventEmitter {
                         return;
                     }
 
-                    this.usedNonces.add(nonce);
+                    this.usedNonces.set(nonce, parseInt(timestamp, 10));
                 } else {
                     const authHeader = req.headers['x-tunnel-secret'];
                     if (authHeader !== this.secret) {
@@ -128,6 +128,16 @@ class TunnelServer extends EventEmitter {
 
             this.emit('tunnel_ready');
         });
+    }
+
+    cleanupExpiredNonces() {
+        const now = Date.now();
+        for (const [nonce, timestamp] of this.usedNonces.entries()) {
+            // If the nonce timestamp is older than 5 minutes + 1 minute grace period for drift, remove it
+            if (now - timestamp > 6 * 60 * 1000) {
+                this.usedNonces.delete(nonce);
+            }
+        }
     }
 
     /**

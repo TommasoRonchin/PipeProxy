@@ -1,8 +1,10 @@
 const fs = require('fs');
-if (fs.existsSync('.env')) {
-    require('dotenv').config({ path: '.env' });
-} else {
-    require('dotenv').config({ path: '.env.client' });
+if (process.env.SKIP_DOTENV !== 'true') {
+    if (fs.existsSync('.env')) {
+        require('dotenv').config({ path: '.env' });
+    } else {
+        require('dotenv').config({ path: '.env.client' });
+    }
 }
 const WebSocket = require('ws');
 const crypto = require('crypto');

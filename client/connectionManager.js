@@ -18,6 +18,9 @@ class ConnectionManager {
         const envMaxBuffer = parseInt(process.env.MAX_SOCKET_BUFFER_MB, 10);
         this.maxSocketBuffer = isNaN(envMaxBuffer) ? (1 * 1024 * 1024) : (envMaxBuffer * 1024 * 1024);
 
+        const envMaxHostnameSize = parseInt(process.env.MAX_HOSTNAME_SIZE, 10);
+        this.maxHostnameSize = isNaN(envMaxHostnameSize) ? 2048 : envMaxHostnameSize;
+
         this.blockLocalNetwork = process.env.BLOCK_LOCAL_NETWORK !== 'false'; // Default to true for security
 
         // Wire the decoder output to handle individual logic frames
@@ -44,6 +47,13 @@ class ConnectionManager {
             // Enforce Max Connections
             if (this.connections.size >= this.maxConnections) {
                 console.warn(`[ConnectionManager] Rejecting connection ${connectionId}: Max limit reached (${this.maxConnections})`);
+                this.sendFrame(TYPES.CLOSE, connectionId);
+                return;
+            }
+
+            // Hostname DoS Protection: Prevent massive payloads from allocating too much memory
+            if (payload.length > this.maxHostnameSize) {
+                console.warn(`[ConnectionManager] Rejecting connection ${connectionId}: Hostname payload too large (${payload.length} bytes, limit is ${this.maxHostnameSize})`);
                 this.sendFrame(TYPES.CLOSE, connectionId);
                 return;
             }

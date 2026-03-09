@@ -2,12 +2,12 @@
 
 A high-performance, production-grade distributed HTTP/HTTPS Proxy system built in raw Node.js. 
 
-PipeProxy allows you to route proxy traffic through a client located behind a NAT (like a Raspberry Pi at home), by keeping a persistent multiplexed WebSocket tunnel connected to a public VPS.
+PipeProxy allows you to route proxy traffic through an external client (such as a Raspberry Pi at home, another server, or a PC) that sits behind a NAT, by keeping a persistent multiplexed WebSocket tunnel connected to a public VPS.
 
 ## 🏗️ Architecture
 
 - **Server A (Public VPS)**: Exposes a standard HTTP/HTTPS proxy port (e.g., `3128`).
-- **Server B (Raspberry Pi)**: Connects to the VPS via a secure WebSocket and performs the actual outbound TCP connections.
+- **Server B (Client Machine)**: Connects to the VPS via a secure WebSocket and performs the actual outbound TCP connections. This can be a Raspberry Pi, a Windows PC, or another Linux server anywhere in the world.
 - **Multiplexing**: Thousands of proxy clients share the same single WebSocket tunnel using a lightning-fast custom 9-byte binary header protocol.
 - **Resiliency**: Built-in Ping/Pong heartbeats, Head-of-Line blocking prevention, connection limits, and auto-reconnect logic.
 
@@ -15,7 +15,7 @@ PipeProxy allows you to route proxy traffic through a client located behind a NA
 
 ## ⚙️ Installation
 
-You will need Node.js installed on both the VPS and the target device (Raspberry Pi).
+You will need Node.js installed on both the VPS and the target client device.
 
 ```bash
 # Clone the repository
@@ -34,21 +34,22 @@ npm install
 
 1. Copy the example environment file:
    ```bash
-   cp .env.server.example .env.server
+   cp .env.server.example .env
    ```
+   > 💡 **Note on `.env` files**: The app prioritizes reading from a file named exactly `.env`. If it doesn't exist, it falls back to `.env.server` (or `.env.client` for the client node) so that you can run both on the same machine for testing.
 2. Edit `.env.server` to customize the ports, the `TUNNEL_SECRET` (critical for security), and the proxy authentication credentials.
 3. Start the server (preferably using pm2 or systemd for background execution):
    ```bash
    node server/proxyServer.js
    ```
 
-### 2. Client Configuration (Raspberry Pi/Home Network)
+### 2. Client Configuration (Home Network, Raspberry, PC)
 
 1. Copy the example environment file:
    ```bash
-   cp .env.client.example .env.client
+   cp .env.client.example .env
    ```
-2. Edit `.env.client` with the IP of your VPS (`SERVER_URL=ws://YOUR_VPS_IP:8080`) and the **exact same** `TUNNEL_SECRET` used on the server.
+2. Edit `.env` with the IP of your VPS (`SERVER_URL=ws://YOUR_VPS_IP:8080`) and the **exact same** `TUNNEL_SECRET` used on the server.
 3. Start the client:
    ```bash
    node client/raspberryClient.js

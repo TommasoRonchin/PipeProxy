@@ -1,8 +1,9 @@
-// Frame types
 const TYPES = {
-  OPEN: 1,
-  DATA: 2,
-  CLOSE: 3,
+    OPEN: 1,
+    DATA: 2,
+    CLOSE: 3,
+    PING: 4,
+    PONG: 5,
 };
 
 /**
@@ -16,21 +17,21 @@ const TYPES = {
  * @returns {Buffer} The encoded frame
  */
 function encodeFrame(type, connectionId, payload = null) {
-  const payloadLength = payload ? payload.length : 0;
-  const buffer = Buffer.alloc(9 + payloadLength);
-  
-  buffer.writeUInt8(type, 0);
-  buffer.writeUInt32BE(connectionId, 1);
-  buffer.writeUInt32BE(payloadLength, 5);
-  
-  if (payload && payloadLength > 0) {
-    payload.copy(buffer, 9);
-  }
-  
-  return buffer;
+    const payloadLength = payload ? payload.length : 0;
+    const buffer = Buffer.alloc(9 + payloadLength);
+
+    buffer.writeUInt8(type, 0);
+    buffer.writeUInt32BE(connectionId, 1);
+    buffer.writeUInt32BE(payloadLength, 5);
+
+    if (payload && payloadLength > 0) {
+        payload.copy(buffer, 9);
+    }
+
+    return buffer;
 }
 
 module.exports = {
-  TYPES,
-  encodeFrame
+    TYPES,
+    encodeFrame
 };

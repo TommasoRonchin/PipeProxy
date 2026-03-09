@@ -10,6 +10,8 @@ class TunnelServer extends EventEmitter {
         this.secret = options.secret;
         this.activeWs = null;
         this.wss = null;
+        this.isAlive = false;
+        this.pingInterval = null;
     }
 
     start() {
@@ -48,6 +50,7 @@ class TunnelServer extends EventEmitter {
                 if (this.activeWs === ws) {
                     console.log(`[TunnelServer] Raspberry Pi connection closed`);
                     this.activeWs = null;
+                    clearInterval(this.pingInterval);
                     this.emit('tunnel_close');
                 }
             });
@@ -55,6 +58,24 @@ class TunnelServer extends EventEmitter {
             ws.on('error', (err) => {
                 console.error(`[TunnelServer] WS Error: ${err.message}`);
             });
+
+            // Heartbeat Logic
+            this.isAlive = true;
+            ws.on('pong', () => {
+                this.isAlive = true;
+            });
+
+            if (this.pingInterval) clearInterval(this.pingInterval);
+            this.pingInterval = setInterval(() => {
+                if (!this.activeWs) return;
+                if (this.isAlive === false) {
+                    console.warn(`[TunnelServer] Ping timeout, terminating connection`);
+                    this.activeWs.terminate();
+                    return;
+                }
+                this.isAlive = false;
+                this.activeWs.ping(); // standard ws ping frame
+            }, 30000); // 30 seconds
 
             this.emit('tunnel_ready');
         });

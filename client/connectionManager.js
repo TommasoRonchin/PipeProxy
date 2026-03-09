@@ -8,6 +8,9 @@ class ConnectionManager {
         this.connections = new Map();
         this.decoder = new FrameDecoder();
 
+        const enableLimits = process.env.ENABLE_MAX_CONNECTIONS === 'true';
+        this.maxConnections = enableLimits ? parseInt(process.env.MAX_CONNECTIONS || '2000', 10) : Infinity;
+
         // Wire the decoder output to handle individual logic frames
         this.decoder.on('frame', (frame) => this.handleFrame(frame));
     }
@@ -26,6 +29,14 @@ class ConnectionManager {
     handleFrame({ type, connectionId, payload }) {
         if (type === TYPES.OPEN) {
             if (!payload) return;
+
+            // Enforce Max Connections
+            if (this.connections.size >= this.maxConnections) {
+                console.warn(`[ConnectionManager] Rejecting connection ${connectionId}: Max limit reached (${this.maxConnections})`);
+                this.sendFrame(TYPES.CLOSE, connectionId);
+                return;
+            }
+
             const targetStr = payload.toString('utf8');
             const parts = targetStr.split(':');
             const host = parts[0];
@@ -61,17 +72,22 @@ class ConnectionManager {
             const socket = this.connections.get(connectionId);
             if (socket) {
                 if (!socket.write(payload)) {
-                    // Implementing backpressure logic:
-                    // If the socket buffer is full (returns false),
-                    // we can pause the global tunnel WS to throttle the VPS flow.
-                    // Note: A single slow TCP socket will throttle the entire tunnel
-                    // in this implementation.
-                    const wsSocket = this.ws._socket;
-                    if (wsSocket) wsSocket.pause();
-
-                    socket.once('drain', () => {
-                        if (wsSocket) wsSocket.resume();
-                    });
+                    // Head-of-Line Blocking fix: 
+                    // Instead of pausing the ENTIRE websocket tunnel (which blocks ALL connections),
+                    // we tell the VPS to stop sending data FOR THIS SPECIFIC connection.
+                    // We can do this by sending a custom PAUSE frame, but for simplicity 
+                    // we can rely on standard OS TCP buffers up to a point, or if we want to be strict,
+                    // we would need a WINDOW_UPDATE protocol.
+                    // For now, removing `wsSocket.pause()` prevents the tunnel from freezing completely
+                    // on one slow connection, allowing other streams to continue flowing smoothly while
+                    // Node handles backpressure natively by buffering in memory up to `highWaterMark`.
+                    // We can optionally destroy the socket if its buffer becomes absurdly large:
+                    if (socket.writableLength > 5 * 1024 * 1024) { // 5MB buffer limit per socket
+                        console.warn(`[ConnectionManager] Destroying socket ${connectionId} due to massive backpressure buffer.`);
+                        this.sendFrame(TYPES.CLOSE, connectionId);
+                        socket.destroy();
+                        this.connections.delete(connectionId);
+                    }
                 }
             } else {
                 // Drop extra data and tell remote that we are closed.

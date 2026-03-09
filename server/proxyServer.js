@@ -5,6 +5,7 @@ if (fs.existsSync('.env')) {
     require('dotenv').config({ path: '.env.server' });
 }
 const net = require('net');
+const tls = require('tls');
 const TunnelServer = require('./tunnelServer');
 const FrameProtocol = require('./frameProtocol');
 
@@ -16,6 +17,10 @@ const PROXY_AUTH_USERNAME = process.env.PROXY_AUTH_USERNAME;
 const PROXY_AUTH_PASSWORD = process.env.PROXY_AUTH_PASSWORD;
 const ENABLE_PROXY_AUTH = process.env.ENABLE_PROXY_AUTH === 'true';
 
+const ENABLE_TLS_PROXY = process.env.ENABLE_TLS_PROXY === 'true';
+const TLS_CERT_PATH = process.env.TLS_CERT_PATH;
+const TLS_KEY_PATH = process.env.TLS_KEY_PATH;
+
 const MAX_PROXY_HEADER_SIZE = process.env.MAX_PROXY_HEADER_SIZE ? parseInt(process.env.MAX_PROXY_HEADER_SIZE, 10) : 8192;
 
 function validateAuth(headerText) {
@@ -26,7 +31,13 @@ function validateAuth(headerText) {
     if (!match) return false;
 
     const credentials = Buffer.from(match[1], 'base64').toString('utf8');
-    const [username, password] = credentials.split(':');
+
+    // Fix: Properly split credentials even if the password contains colons (':')
+    const splitIdx = credentials.indexOf(':');
+    if (splitIdx === -1) return false;
+
+    const username = credentials.substring(0, splitIdx);
+    const password = credentials.substring(splitIdx + 1);
 
     return username === PROXY_AUTH_USERNAME && password === PROXY_AUTH_PASSWORD;
 }
@@ -36,7 +47,7 @@ tunnelServer.start();
 
 const protocol = new FrameProtocol(tunnelServer);
 
-const proxyServer = net.createServer((socket) => {
+const proxyConnectionHandler = (socket) => {
     if (!tunnelServer.isReady()) {
         socket.end('HTTP/1.1 502 Bad Gateway\r\n\r\nTunnel not connected\n');
         return;
@@ -138,8 +149,27 @@ const proxyServer = net.createServer((socket) => {
 
     // Handled errors gracefully during pre-resolution
     socket.on('error', () => { /* ignore */ });
-});
+};
+
+// Start Proxy Server (TLS or Plain TCP)
+let proxyServer;
+if (ENABLE_TLS_PROXY && TLS_CERT_PATH && TLS_KEY_PATH) {
+    try {
+        const options = {
+            key: fs.readFileSync(TLS_KEY_PATH),
+            cert: fs.readFileSync(TLS_CERT_PATH)
+        };
+        proxyServer = tls.createServer(options, proxyConnectionHandler);
+        console.log(`[ProxyServer] TLS/HTTPS enabled for Proxy port ${PROXY_PORT}`);
+    } catch (err) {
+        console.error(`[ProxyServer] Failed to start TLS server: ${err.message}`);
+        process.exit(1);
+    }
+} else {
+    proxyServer = net.createServer(proxyConnectionHandler);
+    console.log(`[ProxyServer] Plain TCP HTTP Proxy enabled (No TLS) for port ${PROXY_PORT}`);
+}
 
 proxyServer.listen(PROXY_PORT, () => {
-    console.log(`[ProxyServer] Raw TCP HTTP/HTTPS Proxy listening on port ${PROXY_PORT}`);
+    console.log(`[ProxyServer] Proxy is listening on port ${PROXY_PORT}`);
 });

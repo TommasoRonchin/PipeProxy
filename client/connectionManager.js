@@ -15,6 +15,8 @@ class ConnectionManager {
         const envMaxBuffer = parseInt(process.env.MAX_SOCKET_BUFFER_MB, 10);
         this.maxSocketBuffer = isNaN(envMaxBuffer) ? (1 * 1024 * 1024) : (envMaxBuffer * 1024 * 1024);
 
+        this.blockLocalNetwork = process.env.BLOCK_LOCAL_NETWORK !== 'false'; // Default to true for security
+
         // Wire the decoder output to handle individual logic frames
         this.decoder.on('frame', (frame) => this.handleFrame(frame));
     }
@@ -47,6 +49,13 @@ class ConnectionManager {
             const parts = targetStr.split(':');
             const host = parts[0];
             const port = parseInt(parts[1], 10) || 80;
+
+            // SSRF Protection: Block access to local network IPs
+            if (this.blockLocalNetwork && this.isLocalNetwork(host)) {
+                console.warn(`[ConnectionManager] SSRF Attempt Blocked: Rejected connection to local network ${host}:${port}`);
+                this.sendFrame(TYPES.CLOSE, connectionId);
+                return;
+            }
 
             // Create new socket connection to the requested target
             const socket = net.connect({ host, port }, () => {
@@ -114,6 +123,33 @@ class ConnectionManager {
             socket.destroy();
         }
         this.connections.clear();
+    }
+
+    isLocalNetwork(host) {
+        // Simple string matching for known private IP ranges and localhost
+        if (!host) return true;
+
+        host = host.toLowerCase();
+        if (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host.endsWith('.localhost')) {
+            return true;
+        }
+
+        // IPv4 typical private networks
+        if (host.startsWith('10.') || host.startsWith('192.168.') || host.startsWith('169.254.')) {
+            return true;
+        }
+
+        if (host.startsWith('172.')) {
+            const secondOctet = parseInt(host.split('.')[1], 10);
+            if (secondOctet >= 16 && secondOctet <= 31) return true;
+        }
+
+        // Catch IPv6 local/private addresses
+        if (host.startsWith('fc') || host.startsWith('fd') || host.startsWith('fe80:')) {
+            return true;
+        }
+
+        return false;
     }
 }
 

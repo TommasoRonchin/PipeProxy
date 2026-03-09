@@ -1,0 +1,23 @@
+# Use a lightweight Node.js image suitable for Raspberry Pi (ARM) and VPS (x86)
+FROM node:20-alpine
+
+# Create app directory
+WORKDIR /usr/src/app
+
+# Copy package files and install production dependencies
+COPY package*.json ./
+RUN npm install --only=production
+
+# Copy specific server files
+COPY server/ ./server/
+COPY shared/ ./shared/
+
+# Set environment
+ENV NODE_ENV=production
+
+# Expose Proxy Port and Tunnel Port
+EXPOSE 3128
+EXPOSE 8080
+
+# Start Server
+CMD [ "node", "server/proxyServer.js" ]

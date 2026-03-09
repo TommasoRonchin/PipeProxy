@@ -137,3 +137,6 @@ dist
 
 
 .agent
+
+.env.server
+.env.client

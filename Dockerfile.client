@@ -1,0 +1,19 @@
+# Use a lightweight Node.js image suitable for Raspberry Pi (ARM) and VPS (x86)
+FROM node:20-alpine
+
+# Create app directory
+WORKDIR /usr/src/app
+
+# Copy package files and install production dependencies
+COPY package*.json ./
+RUN npm install --only=production
+
+# Copy specific client files
+COPY client/ ./client/
+COPY shared/ ./shared/
+
+# Set environment
+ENV NODE_ENV=production
+
+# Start Client
+CMD [ "node", "client/raspberryClient.js" ]

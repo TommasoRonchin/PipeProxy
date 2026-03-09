@@ -1,4 +1,9 @@
-require('dotenv').config({ path: '.env.server' });
+const fs = require('fs');
+if (fs.existsSync('.env')) {
+    require('dotenv').config({ path: '.env' });
+} else {
+    require('dotenv').config({ path: '.env.server' });
+}
 const net = require('net');
 const TunnelServer = require('./tunnelServer');
 const FrameProtocol = require('./frameProtocol');

@@ -9,7 +9,7 @@ if (process.env.SKIP_DOTENV !== 'true') {
 const WebSocket = require('ws');
 const crypto = require('crypto');
 const ConnectionManager = require('./connectionManager');
-const { decryptMessage } = require('../shared/cryptoStream');
+const { decryptMessage, resetCryptoStream } = require('../shared/cryptoStream');
 
 const SERVER_URL = process.env.SERVER_URL || 'ws://localhost:8080';
 const TUNNEL_SECRET = process.env.TUNNEL_SECRET;
@@ -36,6 +36,9 @@ function connect() {
             };
         }
     }
+
+    // Reset Sequence Counters for Replay Attack Prevention when connecting
+    resetCryptoStream();
 
     const ws = new WebSocket(SERVER_URL, options);
     const manager = new ConnectionManager(ws);

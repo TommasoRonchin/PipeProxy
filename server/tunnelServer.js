@@ -2,7 +2,7 @@ const { WebSocketServer } = require('ws');
 const { EventEmitter } = require('events');
 const FrameDecoder = require('../shared/frameDecoder');
 const { encodeFrame } = require('../shared/frameEncoder');
-const { encryptMessage, decryptMessage } = require('../shared/cryptoStream');
+const { encryptMessage, decryptMessage, resetCryptoStream } = require('../shared/cryptoStream');
 const crypto = require('crypto');
 
 class TunnelServer extends EventEmitter {
@@ -86,6 +86,9 @@ class TunnelServer extends EventEmitter {
                 console.log(`[TunnelServer] Dropping previous tunnel connection`);
                 this.activeWs.close(1000, 'New connection established');
             }
+
+            // Reset Sequence Counters for Replay Attack Prevention
+            resetCryptoStream();
 
             this.activeWs = ws;
             const decoder = new FrameDecoder();

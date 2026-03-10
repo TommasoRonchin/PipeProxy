@@ -109,6 +109,7 @@ async function runTests() {
     await testInvalidPortCrash();
     dummyServer.close();
     console.log('\n✅ All Security Patch tests completed successfully!');
+    process.exit(0);
 }
 
 runTests();

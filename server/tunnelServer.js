@@ -115,6 +115,8 @@ class TunnelServer extends EventEmitter {
                 if (this.lastConnectionTime && (now - this.lastConnectionTime < RATE_LIMIT_MS)) {
                     console.warn(`[TunnelServer] Rate limiting tunnel connection from ${req.socket.remoteAddress} (flapping detected)`);
                     ws.close(1008, 'Rate limited');
+                    // DO NOT update this.lastConnectionTime here.
+                    // Doing so would allow an attacker to keep the legitimate client permanently locked out.
                     return;
                 }
                 this.lastConnectionTime = now;

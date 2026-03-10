@@ -76,15 +76,15 @@ const proxyConnectionHandler = (socket) => {
     });
 
     // Slowloris Connection Exhaustion Protection
-    socket.setTimeout(MAX_PROXY_TIMEOUT_MS);
-    const initialTimeoutHandler = () => {
+    // Use an absolute hard timer. socket.setTimeout resets on every byte received,
+    // which allows an attacker to hold the connection open indefinitely by sending 1 byte very slowly.
+    const hardTimeoutTimer = setTimeout(() => {
         if (!resolved) {
-            console.warn(`[ProxyServer] Connection timed out during header parsing`);
+            console.warn(`[ProxyServer] Connection timed out during header parsing (Slowloris protection)`);
             socket.end('HTTP/1.1 408 Request Timeout\r\n\r\n');
             socket.destroy();
         }
-    };
-    socket.once('timeout', initialTimeoutHandler);
+    }, MAX_PROXY_TIMEOUT_MS);
 
     const onData = (chunk) => {
         if (resolved) return;
@@ -102,8 +102,8 @@ const proxyConnectionHandler = (socket) => {
         const headerEndIdx = headerBuffer.indexOf('\r\n\r\n');
         if (headerEndIdx !== -1) {
             resolved = true;
+            clearTimeout(hardTimeoutTimer);
             socket.removeListener('data', onData);
-            socket.removeListener('timeout', initialTimeoutHandler);
 
             // Set Idle Timeout to prevent connections from hanging indefinitely
             const IDLE_TIMEOUT_MS = process.env.IDLE_TIMEOUT_MS ? parseInt(process.env.IDLE_TIMEOUT_MS, 10) : 60000;

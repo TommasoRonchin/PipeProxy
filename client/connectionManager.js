@@ -83,9 +83,19 @@ class ConnectionManager {
             }
 
             const targetStr = payload.toString('utf8');
-            const parts = targetStr.split(':');
-            const host = parts[0];
-            const port = parseInt(parts[1], 10) || 80;
+            const lastColonIdx = targetStr.lastIndexOf(':');
+            let host;
+            let port = 80;
+            if (lastColonIdx !== -1 && (targetStr.indexOf(']') === -1 || targetStr.indexOf(']') < lastColonIdx)) {
+                host = targetStr.substring(0, lastColonIdx);
+                port = parseInt(targetStr.substring(lastColonIdx + 1), 10) || 80;
+            } else {
+                host = targetStr;
+            }
+
+            if (host.startsWith('[') && host.endsWith(']')) {
+                host = host.substring(1, host.length - 1);
+            }
 
             // Validate port to prevent unhandled RangeError from net.connect
             if (isNaN(port) || port <= 0 || port > 65535) {

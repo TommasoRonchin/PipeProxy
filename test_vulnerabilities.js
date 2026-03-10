@@ -62,5 +62,6 @@ setTimeout(() => {
     } else {
         console.log('✅ Aborted connection was properly dropped, no ghost socket created.');
         console.log('\n✅ All Security Patch tests completed successfully!');
+        process.exit(0);
     }
 }, 3000);

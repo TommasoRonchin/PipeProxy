@@ -20,6 +20,13 @@ class FrameDecoder extends EventEmitter {
      * @param {Buffer} chunk 
      */
     push(chunk) {
+        // Prevent total buffer from growing too large (Aggregation DoS Protection)
+        if (this.buffer.length + chunk.length > this.maxFrameSize * 2) {
+            this.emit('error', new Error(`Total decoder buffer exceeded safety limit.`));
+            this.buffer = Buffer.alloc(0);
+            return;
+        }
+
         this.buffer = Buffer.concat([this.buffer, chunk]);
         this._processBuffer();
     }
@@ -31,10 +38,10 @@ class FrameDecoder extends EventEmitter {
             const connectionId = this.buffer.readUInt32BE(1);
             const length = this.buffer.readUInt32BE(5);
 
-            // Prevent OOM Attacks
+            // Prevent OOM Attacks (Single Frame Limit)
             if (length > this.maxFrameSize) {
                 this.emit('error', new Error(`Frame too large: ${length} bytes exceeds maximum allowed of ${this.maxFrameSize} bytes.`));
-                this.buffer = Buffer.alloc(0); // clear buffer to prevent further parsing attempts on corrupt data
+                this.buffer = Buffer.alloc(0);
                 return;
             }
 
@@ -42,20 +49,22 @@ class FrameDecoder extends EventEmitter {
 
             if (this.buffer.length >= totalFrameLength) {
                 // We have a complete frame
-                let payload = null;
-                if (length > 0) {
-                    payload = Buffer.alloc(length);
-                    this.buffer.copy(payload, 0, 9, totalFrameLength);
-                }
+                const payload = length > 0 ? this.buffer.subarray(9, totalFrameLength) : null;
 
-                // Remove frame from buffer
+                // Remove frame from buffer using subarray (no copy, just pointer move)
+                // We use a copy periodically or if the offset gets too large to allow GC of old chunks
+                // For simplicity in this implementation, we use subarray and occasional concat cleanup
                 this.buffer = this.buffer.subarray(totalFrameLength);
 
-                this.emit('frame', { type, connectionId, payload });
+                this.emit('frame', { type, connectionId, payload: payload ? Buffer.from(payload) : null });
             } else {
-                // Incomplete frame, wait for more data
                 break;
             }
+        }
+
+        // If buffer is empty, reset to avoid holding onto a large allocated buffer through subarray
+        if (this.buffer.length === 0) {
+            this.buffer = Buffer.alloc(0);
         }
     }
 }

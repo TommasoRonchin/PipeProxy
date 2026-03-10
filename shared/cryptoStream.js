@@ -99,6 +99,11 @@ class CryptoStream {
  * Since crypto.timingSafeEqual requires equal length, we hash the inputs first.
  */
 function timingSafeEqual(a, b) {
+    // Prevent crashes if inputs are undefined or null (e.g. missing auth headers)
+    if (a === undefined || a === null || b === undefined || b === null) {
+        return a === b;
+    }
+
     if (typeof a !== 'string' || typeof b !== 'string') {
         if (!Buffer.isBuffer(a) || !Buffer.isBuffer(b)) {
             return a === b; // Fallback for non-string/buffer types
@@ -106,6 +111,7 @@ function timingSafeEqual(a, b) {
     }
 
     // Hash both values to ensure they have the same length before comparison
+    // This allows comparing strings of different lengths safely
     const hashA = crypto.createHash('sha256').update(a).digest();
     const hashB = crypto.createHash('sha256').update(b).digest();
 

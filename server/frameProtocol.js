@@ -49,9 +49,20 @@ class FrameProtocol {
         }
 
         // Assign connectionId
-        const connectionId = this.nextConnectionId++;
-        // Maximum 32-bit uint
-        if (this.nextConnectionId > 4000000000) this.nextConnectionId = 1;
+        let connectionId;
+        let attempts = 0;
+        do {
+            connectionId = this.nextConnectionId++;
+            if (this.nextConnectionId > 4000000000) this.nextConnectionId = 1;
+            attempts++;
+            // Safety break to prevent infinite loop if somehow all 4 billion IDs are used (unlikely)
+            if (attempts > 1000) {
+                console.error("[FrameProtocol] CRITICAL: Could not find an available connection ID after 1000 attempts.");
+                socket.end('HTTP/1.1 503 Service Unavailable\r\n\r\nServer Full');
+                socket.destroy();
+                return null;
+            }
+        } while (this.connections.has(connectionId));
 
         this.connections.set(connectionId, socket);
 

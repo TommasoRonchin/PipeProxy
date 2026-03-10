@@ -123,13 +123,16 @@ class TunnelServer extends EventEmitter {
                 }
                 this.lastConnectionTime = now;
 
-                // If there's an existing connection, drop it
+                // Se c'è una connessione esistente, la droppiamo
                 if (this.activeWs) {
                     console.log(`[TunnelServer] Dropping previous tunnel connection`);
+                    // Emettiamo forzatamente l'evento prima di sovrascriverla o distruggerla,
+                    // per permettere alla logica di FrameProtocol di chiudere tutte le connessioni proxy appese.
+                    this.emit('tunnel_close');
                     this.activeWs.close(1000, 'New connection established');
                 }
 
-                // Initialize Crypto Stream exclusively for this new socket connection
+                // Inizializza il Crypto Stream per questa specifica connessione socket
                 ws.cryptoStream = new CryptoStream({
                     enableEncryption: process.env.ENABLE_ENCRYPTION === 'true',
                     secret: process.env.ENCRYPTION_SECRET,
@@ -159,6 +162,8 @@ class TunnelServer extends EventEmitter {
                 });
 
                 ws.on('close', () => {
+                    // Controlliamo se la socket che si sta chiudendo è ancora quella attiva
+                    // Se lo è, significa che PING timeout, errore di rete, o chiusura pacifica.
                     if (this.activeWs === ws) {
                         console.log(`[TunnelServer] Raspberry Pi connection closed`);
                         this.activeWs = null;

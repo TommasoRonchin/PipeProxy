@@ -56,6 +56,11 @@ function connect() {
             manager.handleMessage(cryptoStream.decryptMessage(data));
         } catch (e) {
             console.error(`[RaspberryClient] Decryption failed: ${e.message}`);
+            // Critical security fix: if decryption fails (e.g. sequence number mismatch 
+            // after a connection flap or tampering), we MUST drop the connection to force
+            // a fresh handshake and reset the expected payload sequences. Otherwise, we
+            // swallow exceptions forever and the tunnel gets "frozen" but kept alive by ping.
+            ws.terminate();
         }
     });
 

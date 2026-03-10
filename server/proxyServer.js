@@ -230,7 +230,13 @@ const proxyConnectionHandler = (socket) => {
                 const safeHeaderText = linesToFilter
                     .filter(line => {
                         const colonIdx = line.indexOf(':');
-                        if (colonIdx === -1) return true; // Keep request lines etc.
+                        if (colonIdx === -1) {
+                            // If it doesn't have a colon, it's either the request line, 
+                            // or it's a folded header (which is obsolete and invalid for authorization/sensitive headers anyway).
+                            // We allow the HTTP method line (starts with GET, POST, CONNECT, etc)
+                            const isRequestLine = /^[A-Z]+\s+/.test(line);
+                            return isRequestLine;
+                        }
                         const headerName = line.substring(0, colonIdx).trim().toLowerCase();
                         return !hopByHopHeaders.includes(headerName);
                     })

@@ -95,6 +95,12 @@ class ConnectionManager {
             this.pendingConnections.set(connectionId, []); // Init queue
 
             dns.lookup(host, { family: 4 }, (err, address, family) => {
+                // Check if connection was closed during DNS resolution
+                if (!this.pendingConnections.has(connectionId)) {
+                    console.log(`[DEBUG] DNS resolved for ${host} but connection ${connectionId} was already aborted.`);
+                    return;
+                }
+
                 if (err) {
                     console.warn(`[ConnectionManager] Failed to resolve target host ${host}: ${err.message}`);
                     this.sendFrame(TYPES.CLOSE, connectionId);
@@ -164,35 +170,39 @@ class ConnectionManager {
             console.log(`[DEBUG] Received DATA frame for ${connectionId}, length: ${payload ? payload.length : 0}`);
             const socket = this.connections.get(connectionId);
             if (socket) {
-                if (!socket.write(payload)) {
-                    // Head-of-Line Blocking fix: 
-                    // Instead of pausing the ENTIRE websocket tunnel (which blocks ALL connections),
-                    // we tell the VPS to stop sending data FOR THIS SPECIFIC connection.
-                    // We can do this by sending a custom PAUSE frame, but for simplicity 
-                    // we can rely on standard OS TCP buffers up to a point, or if we want to be strict,
-                    // we would need a WINDOW_UPDATE protocol.
-                    // For now, removing `wsSocket.pause()` prevents the tunnel from freezing completely
-                    // on one slow connection, allowing other streams to continue flowing smoothly while
-                    // Node handles backpressure natively by buffering in memory up to `highWaterMark`.
-                    // We can optionally destroy the socket if its buffer becomes absurdly large:
-                    if (socket.writableLength > this.maxSocketBuffer) { // Buffer limit per socket
-                        console.warn(`[ConnectionManager] Destroying socket ${connectionId} due to massive backpressure buffer.`);
-                        this.sendFrame(TYPES.CLOSE, connectionId);
-                        socket.destroy();
-                        this.connections.delete(connectionId);
+                if (payload && payload.length > 0) {
+                    if (!socket.write(payload)) {
+                        // Head-of-Line Blocking fix: 
+                        // Instead of pausing the ENTIRE websocket tunnel (which blocks ALL connections),
+                        // we tell the VPS to stop sending data FOR THIS SPECIFIC connection.
+                        // We can do this by sending a custom PAUSE frame, but for simplicity 
+                        // we can rely on standard OS TCP buffers up to a point, or if we want to be strict,
+                        // we would need a WINDOW_UPDATE protocol.
+                        // For now, removing `wsSocket.pause()` prevents the tunnel from freezing completely
+                        // on one slow connection, allowing other streams to continue flowing smoothly while
+                        // Node handles backpressure natively by buffering in memory up to `highWaterMark`.
+                        // We can optionally destroy the socket if its buffer becomes absurdly large:
+                        if (socket.writableLength > this.maxSocketBuffer) { // Buffer limit per socket
+                            console.warn(`[ConnectionManager] Destroying socket ${connectionId} due to massive backpressure buffer.`);
+                            this.sendFrame(TYPES.CLOSE, connectionId);
+                            socket.destroy();
+                            this.connections.delete(connectionId);
+                        }
                     }
                 }
             } else if (this.pendingConnections.has(connectionId)) {
                 // Buffer early data until DNS/connect completes
-                const queue = this.pendingConnections.get(connectionId);
-                queue.push(payload);
+                if (payload && payload.length > 0) {
+                    const queue = this.pendingConnections.get(connectionId);
+                    queue.push(payload);
 
-                // Prevent OOM: if the queued data exceeds the max socket buffer size
-                const totalQueuedSize = queue.reduce((acc, buf) => acc + (buf ? buf.length : 0), 0);
-                if (totalQueuedSize > this.maxSocketBuffer) {
-                    console.warn(`[ConnectionManager] Destroying connection ${connectionId} due to massive early data buffer during DNS resolution.`);
-                    this.sendFrame(TYPES.CLOSE, connectionId);
-                    this.pendingConnections.delete(connectionId);
+                    // Prevent OOM: if the queued data exceeds the max socket buffer size
+                    const totalQueuedSize = queue.reduce((acc, buf) => acc + (buf ? buf.length : 0), 0);
+                    if (totalQueuedSize > this.maxSocketBuffer) {
+                        console.warn(`[ConnectionManager] Destroying connection ${connectionId} due to massive early data buffer during DNS resolution.`);
+                        this.sendFrame(TYPES.CLOSE, connectionId);
+                        this.pendingConnections.delete(connectionId);
+                    }
                 }
             } else {
                 // Drop extra data and tell remote that we are closed.

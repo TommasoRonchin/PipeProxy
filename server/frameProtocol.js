@@ -30,7 +30,9 @@ class FrameProtocol {
             // Backpressure logic: if socket.write returns false, 
             // we could pause reading from the tunnel but for a multiplexed WS it's tricky.
             // We'll write to the socket buffer with standard Node.js mechanisms.
-            socket.write(payload);
+            if (payload && payload.length > 0) {
+                socket.write(payload);
+            }
         } else if (type === TYPES.CLOSE) {
             socket.end();
             this.connections.delete(connectionId);

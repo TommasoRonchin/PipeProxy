@@ -26,6 +26,9 @@ const TLS_KEY_PATH = process.env.TLS_KEY_PATH;
 const MAX_PROXY_HEADER_SIZE = process.env.MAX_PROXY_HEADER_SIZE ? parseInt(process.env.MAX_PROXY_HEADER_SIZE, 10) : 8192;
 const MAX_PROXY_TIMEOUT_MS = process.env.MAX_PROXY_TIMEOUT_MS ? parseInt(process.env.MAX_PROXY_TIMEOUT_MS, 10) : 10000;
 const REWRITE_PROXY_URLS = process.env.REWRITE_PROXY_URLS !== 'false'; // Default true
+const MAX_CONCURRENT_PROXY_CONNECTIONS = process.env.MAX_CONCURRENT_PROXY_CONNECTIONS ? parseInt(process.env.MAX_CONCURRENT_PROXY_CONNECTIONS, 10) : 500;
+
+let activeProxyConnections = 0;
 
 function validateAuth(headerText) {
     if (!ENABLE_PROXY_AUTH) return true; // Auth explicitly disabled
@@ -59,6 +62,19 @@ const proxyConnectionHandler = (socket) => {
     let headerBuffer = Buffer.alloc(0);
     let resolved = false;
 
+    // Connection limiting
+    if (activeProxyConnections >= MAX_CONCURRENT_PROXY_CONNECTIONS) {
+        console.warn(`[ProxyServer] Rejecting connection: Max concurrent proxy connections reached (${MAX_CONCURRENT_PROXY_CONNECTIONS})`);
+        socket.end('HTTP/1.1 503 Service Unavailable\r\n\r\nServer Busy');
+        socket.destroy();
+        return;
+    }
+    activeProxyConnections++;
+
+    socket.on('close', () => {
+        activeProxyConnections--;
+    });
+
     // Slowloris Connection Exhaustion Protection
     socket.setTimeout(MAX_PROXY_TIMEOUT_MS);
     socket.once('timeout', () => {
@@ -85,8 +101,8 @@ const proxyConnectionHandler = (socket) => {
         const headerEndIdx = headerBuffer.indexOf('\r\n\r\n');
         if (headerEndIdx !== -1) {
             resolved = true;
-            socket.setTimeout(0); // clear timeout once headers are parsed
             socket.removeListener('data', onData);
+            socket.setTimeout(0); // clear timeout once headers are parsed
 
             const headerText = headerBuffer.subarray(0, headerEndIdx).toString('utf8');
 
@@ -191,20 +207,22 @@ const proxyConnectionHandler = (socket) => {
                 }
 
                 const hopByHopHeaders = [
-                    'proxy-authorization:',
-                    'proxy-connection:',
-                    'connection:',
-                    'keep-alive:',
-                    'upgrade:',
-                    'te:',
-                    'trailer:',
-                    'transfer-encoding:'
+                    'proxy-authorization',
+                    'proxy-connection',
+                    'connection',
+                    'keep-alive',
+                    'upgrade',
+                    'te',
+                    'trailer',
+                    'transfer-encoding'
                 ];
 
                 const safeHeaderText = linesToFilter
                     .filter(line => {
-                        const lower = line.toLowerCase();
-                        return !hopByHopHeaders.some(h => lower.startsWith(h));
+                        const colonIdx = line.indexOf(':');
+                        if (colonIdx === -1) return true; // Keep request lines etc.
+                        const headerName = line.substring(0, colonIdx).trim().toLowerCase();
+                        return !hopByHopHeaders.includes(headerName);
                     })
                     .join('\r\n') + '\r\n\r\n';
 

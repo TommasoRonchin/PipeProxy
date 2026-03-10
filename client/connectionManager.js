@@ -22,6 +22,8 @@ class ConnectionManager {
         const envMaxHostnameSize = parseInt(process.env.MAX_HOSTNAME_SIZE, 10);
         this.maxHostnameSize = isNaN(envMaxHostnameSize) ? 2048 : envMaxHostnameSize;
 
+        this.maxPendingConnections = process.env.MAX_PENDING_CONNECTIONS ? parseInt(process.env.MAX_PENDING_CONNECTIONS, 10) : 1000;
+
         this.blockLocalNetwork = process.env.BLOCK_LOCAL_NETWORK !== 'false'; // Default to true for security
 
         // Websocket Backpressure Settings
@@ -62,6 +64,13 @@ class ConnectionManager {
             // Enforce Max Connections
             if ((this.connections.size + this.pendingConnections.size) >= this.maxConnections) {
                 console.warn(`[ConnectionManager] Rejecting connection ${connectionId}: Max limit reached (${this.maxConnections})`);
+                this.sendFrame(TYPES.CLOSE, connectionId);
+                return;
+            }
+
+            // Enforce Max Pending Connections
+            if (this.pendingConnections.size >= this.maxPendingConnections) {
+                console.warn(`[ConnectionManager] Rejecting connection ${connectionId}: Max pending limit reached (${this.maxPendingConnections})`);
                 this.sendFrame(TYPES.CLOSE, connectionId);
                 return;
             }
@@ -162,7 +171,7 @@ class ConnectionManager {
                 socket.on('close', (hadError) => { console.log(`[DEBUG] socket close for ${connectionId}, hadError: ${hadError}`); cleanup(); });
 
                 socket.on('error', (err) => {
-                    console.error(`[DEBUG] Target connection error for ${host}:${port}: ${err.message}`);
+                    console.error(`[ConnectionManager] Target connection error for ${host}:${port}: ${err.message}`);
                     cleanup();
                 });
             });
@@ -298,12 +307,17 @@ class ConnectionManager {
                 return true;
             }
 
-            // For ipv4Mapped addresses, we must also check the underlying IPv4 address
-            if (range === 'ipv4Mapped' && addr.kind() === 'ipv6') {
+            // Check for IPv4 mapped in IPv6
+            if (addr.kind() === 'ipv6' && addr.isIPv4MappedAddress()) {
                 const mappedIPv4 = addr.toIPv4Address();
                 if (blockedRanges.includes(mappedIPv4.range())) {
                     return true;
                 }
+            }
+
+            // Special handling for 0.0.0.0 and ::
+            if (ipString === '0.0.0.0' || ipString === '::') {
+                return true;
             }
 
             return false;

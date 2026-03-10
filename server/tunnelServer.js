@@ -24,7 +24,7 @@ class TunnelServer extends EventEmitter {
         this.cryptoStream = null;
 
         // Clear used nonces periodically to prevent memory leaks, but only remove expired ones
-        setInterval(() => this.cleanupExpiredNonces(), 60 * 1000); // Check every minute
+        this.nonceCleanupInterval = setInterval(() => this.cleanupExpiredNonces(), 60 * 1000); // Check every minute
     }
 
     async start() {
@@ -49,6 +49,7 @@ class TunnelServer extends EventEmitter {
                 // For future errors after successful startup
                 this.wss.on('error', (err) => {
                     console.error(`[TunnelServer] WSS Runtime Error: ${err.message}`);
+                    this.emit('error', err);
                 });
 
             } catch (err) {
@@ -177,6 +178,25 @@ class TunnelServer extends EventEmitter {
                 this.emit('tunnel_ready');
             });
         });
+    }
+
+    stop() {
+        if (this.nonceCleanupInterval) {
+            clearInterval(this.nonceCleanupInterval);
+            this.nonceCleanupInterval = null;
+        }
+        if (this.pingInterval) {
+            clearInterval(this.pingInterval);
+            this.pingInterval = null;
+        }
+        if (this.wss) {
+            this.wss.close();
+            this.wss = null;
+        }
+        if (this.activeWs) {
+            this.activeWs.terminate();
+            this.activeWs = null;
+        }
     }
 
     cleanupExpiredNonces() {

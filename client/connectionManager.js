@@ -133,6 +133,7 @@ class ConnectionManager {
                 if (this.blockLocalNetwork && this.isProtectedIP(address)) {
                     console.warn(`[ConnectionManager] SSRF Attempt Blocked (DNS Check): Rejected connection to resolved IP ${address} for host ${host}`);
                     this.sendFrame(TYPES.CLOSE, connectionId);
+                    this.pendingConnections.delete(connectionId);
                     return;
                 }
 
@@ -191,6 +192,11 @@ class ConnectionManager {
             console.log(`[DEBUG] Received DATA frame for ${connectionId}, length: ${payload ? payload.length : 0}`);
             const socket = this.connections.get(connectionId);
             if (socket) {
+                if (socket.destroyed) {
+                    this.sendFrame(TYPES.CLOSE, connectionId);
+                    this.connections.delete(connectionId);
+                    return;
+                }
                 if (payload && payload.length > 0) {
                     if (!socket.write(payload)) {
                         // Head-of-Line Blocking fix: 

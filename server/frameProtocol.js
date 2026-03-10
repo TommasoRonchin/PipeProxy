@@ -36,6 +36,11 @@ class FrameProtocol extends EventEmitter {
             // we could pause reading from the tunnel but for a multiplexed WS it's tricky.
             // We'll write to the socket buffer with standard Node.js mechanisms.
             // Buffer limit check to prevent OOM
+            if (socket.destroyed) {
+                this.tunnelServer.sendFrame(TYPES.CLOSE, connectionId);
+                this.connections.delete(connectionId);
+                return;
+            }
             if (payload && payload.length > 0) {
                 if (!socket.write(payload)) {
                     if (socket.writableLength > this.maxSocketBuffer) {
@@ -47,9 +52,9 @@ class FrameProtocol extends EventEmitter {
                 }
             }
         } else if (type === TYPES.CLOSE) {
-            socket.end();
+            this.emit('close', connectionId); // EMIT FIRST so proxyServer catches it
+            socket.end(); // THEN END SOCKET
             this.connections.delete(connectionId);
-            this.emit('close', connectionId);
         } else if (type === TYPES.OPEN_ACK) {
             this.emit('open_ack', connectionId);
         }

@@ -164,7 +164,7 @@ const proxyConnectionHandler = (socket) => {
                 // For standard HTTP proxy request, forward the payload upstream.
                 // We must strip Proxy-Authorization to prevent credential leakage.
                 const extraData = headerBuffer.subarray(headerEndIdx + 4);
-                
+
                 const safeHeaderText = headerText
                     .split('\r\n')
                     .filter(line => {
@@ -172,7 +172,7 @@ const proxyConnectionHandler = (socket) => {
                         return !lower.startsWith('proxy-authorization:') && !lower.startsWith('proxy-connection:');
                     })
                     .join('\r\n') + '\r\n\r\n';
-                
+
                 const safeHeaderBuffer = Buffer.concat([Buffer.from(safeHeaderText, 'utf8'), extraData]);
 
                 const { TYPES } = require('../shared/frameEncoder');
@@ -218,6 +218,17 @@ try {
     console.error(`[ProxyServer] CRITICAL: Failed to start Tunnel Server: ${err.message}`);
     process.exit(1);
 }
+
+// Global server error handling (Point 5)
+proxyServer.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+        console.error(`[ProxyServer] CRITICAL: Port ${PROXY_PORT} is already in use.`);
+    } else {
+        console.error(`[ProxyServer] Global Error: ${err.message}`);
+    }
+    // Don't crash the whole app if it's transient, but for EADDRINUSE we probably want to exit gracefully
+    if (err.code === 'EADDRINUSE') process.exit(1);
+});
 
 proxyServer.listen(PROXY_PORT, () => {
     console.log(`[ProxyServer] Proxy is listening on port ${PROXY_PORT}`);

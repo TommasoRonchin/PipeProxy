@@ -54,7 +54,7 @@ class FrameProtocol extends EventEmitter {
             }
         } else if (type === TYPES.CLOSE) {
             this.emit('close', connectionId); // EMIT FIRST so proxyServer catches it
-            socket.end(); // THEN END SOCKET
+            socket.destroy(); // FORCE DESTROY INSTEAD OF END TO PREVENT FD EXHAUSTION (TIME_WAIT)
             this.connections.delete(connectionId);
         } else if (type === TYPES.OPEN_ACK) {
             this.emit('open_ack', connectionId);
@@ -94,7 +94,20 @@ class FrameProtocol extends EventEmitter {
 
         // Handle local socket data
         socket.on('data', (data) => {
-            this.tunnelServer.sendFrame(TYPES.DATA, connectionId, data);
+            let processedData = data;
+
+            // SECURITY: Strip subsequent Proxy-Authorization headers in HTTP pipelined requests
+            if (socket.isHttpProxy && data.includes('Proxy-Authorization:')) {
+                // If it's pure HTTP proxy traffic (not CONNECT), we strip proxy credentials
+                // so they don't leak to the destination server.
+                const text = data.toString('utf8');
+                const safeText = text.split('\r\n')
+                    .filter(line => !line.toLowerCase().startsWith('proxy-authorization:'))
+                    .join('\r\n');
+                processedData = Buffer.from(safeText, 'utf8');
+            }
+
+            this.tunnelServer.sendFrame(TYPES.DATA, connectionId, processedData);
         });
 
         // Cleanup local socket

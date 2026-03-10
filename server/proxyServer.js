@@ -195,6 +195,10 @@ const proxyConnectionHandler = (socket) => {
                 return;
             }
 
+            if (method !== 'CONNECT') {
+                socket.isHttpProxy = true; // Flag for downstream protection against Pipelining Leaks
+            }
+
             // Register connection
             const connId = protocol.registerConnection(socket, host, port);
             if (!connId) return;

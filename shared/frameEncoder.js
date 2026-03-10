@@ -19,6 +19,15 @@ const TYPES = {
  */
 function encodeFrame(type, connectionId, payload = null) {
     const payloadLength = payload ? payload.length : 0;
+
+    const envMaxMb = parseInt(process.env.MAX_ENCODE_FRAME_SIZE_MB, 10);
+    const maxEncodeSize = isNaN(envMaxMb) ? (50 * 1024 * 1024) : (envMaxMb * 1024 * 1024);
+
+    // Safety guard against ridiculous buffer allocations leading to OOM (Denial of Service)
+    if (payloadLength > maxEncodeSize) {
+        throw new Error(`[FrameEncoder] CRITICAL: Attempted to encode a frame exceeding ${maxEncodeSize / (1024 * 1024)}MB limit (${payloadLength} bytes). Payload rejected to prevent OOM.`);
+    }
+
     const buffer = Buffer.alloc(9 + payloadLength);
 
     buffer.writeUInt8(type, 0);

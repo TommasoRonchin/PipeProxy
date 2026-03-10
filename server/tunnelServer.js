@@ -198,7 +198,11 @@ class TunnelServer extends EventEmitter {
                         return;
                     }
                     this.isAlive = false;
-                    this.activeWs.ping(); // standard ws ping frame
+                    try {
+                        this.activeWs.ping(); // standard ws ping frame
+                    } catch (e) {
+                        console.error(`[TunnelServer] Error sending ping: ${e.message}`);
+                    }
                 }, this.pingIntervalMs);
 
                 this.emit('tunnel_ready');

@@ -77,18 +77,26 @@ class CryptoStream {
         const seq = decryptedPayloadWithSeq.readUInt32BE(0);
 
         // Expected strict incrementing.
+        // We use unsigned 32-bit arithmetic to safely handle the integer wrap around 4.2 billion
+        const diff = (seq - this.expectedInSeq) >>> 0;
+
         if (this.isStrictSequenceEnabled) {
-            if (seq !== this.expectedInSeq) {
+            if (diff !== 0) {
                 throw new Error(`Replay Attack Detected: Received sequence ${seq}, expected exactly ${this.expectedInSeq}`);
             }
         } else {
-            if (seq < this.expectedInSeq) {
+            // If diff > 2 billion, we assume it's a very old packet (or wrap-around error)
+            // This allows late packets to arrive out of order but drops severely delayed or replayed packets
+            if (diff > 2147483647) {
                 throw new Error(`Replay Attack Detected: Received sequence ${seq}, expected at least ${this.expectedInSeq}`);
             }
         }
 
         // Update our tracker for the next acceptable message
-        this.expectedInSeq = (seq + 1) >>> 0;
+        // If strict, we just increment. If non-strict, we jump forward if we received a newer packet
+        this.expectedInSeq = (diff === 0 || this.isStrictSequenceEnabled)
+            ? ((this.expectedInSeq + 1) >>> 0)
+            : ((seq + 1) >>> 0);
 
         return decryptedPayloadWithSeq.subarray(4);
     }

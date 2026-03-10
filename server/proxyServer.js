@@ -25,6 +25,7 @@ const TLS_KEY_PATH = process.env.TLS_KEY_PATH;
 
 const MAX_PROXY_HEADER_SIZE = process.env.MAX_PROXY_HEADER_SIZE ? parseInt(process.env.MAX_PROXY_HEADER_SIZE, 10) : 8192;
 const MAX_PROXY_TIMEOUT_MS = process.env.MAX_PROXY_TIMEOUT_MS ? parseInt(process.env.MAX_PROXY_TIMEOUT_MS, 10) : 10000;
+const REWRITE_PROXY_URLS = process.env.REWRITE_PROXY_URLS !== 'false'; // Default true
 
 function validateAuth(headerText) {
     if (!ENABLE_PROXY_AUTH) return true; // Auth explicitly disabled
@@ -115,9 +116,18 @@ const proxyConnectionHandler = (socket) => {
             let port = 80;
 
             if (method === 'CONNECT') {
-                const parts = target.split(':');
-                host = parts[0];
-                port = parseInt(parts[1], 10) || 443;
+                const lastColonIdx = target.lastIndexOf(':');
+                if (lastColonIdx !== -1 && (target.indexOf(']') === -1 || target.indexOf(']') < lastColonIdx)) {
+                    host = target.substring(0, lastColonIdx);
+                    port = parseInt(target.substring(lastColonIdx + 1), 10) || 443;
+                } else {
+                    host = target;
+                    port = 443;
+                }
+                // Remove brackets if IPv6
+                if (host.startsWith('[') && host.endsWith(']')) {
+                    host = host.substring(1, host.length - 1);
+                }
             } else {
                 // Plain HTTP proxy requests like http://example.com:8080/path
                 try {
@@ -165,8 +175,21 @@ const proxyConnectionHandler = (socket) => {
                 // We must strip Proxy-Authorization to prevent credential leakage.
                 const extraData = headerBuffer.subarray(headerEndIdx + 4);
 
-                const safeHeaderText = headerText
-                    .split('\r\n')
+                const linesToFilter = headerText.split('\r\n');
+
+                // Rewrite first line to use absolute path instead of absolute URL (customizable)
+                const reqLineMatch = linesToFilter[0].match(/^([A-Z]+)\s+([^\s]+)\s+(HTTP\/[1-9\.]+)$/);
+                if (reqLineMatch && REWRITE_PROXY_URLS) {
+                    try {
+                        const urlObj = new URL(reqLineMatch[2]);
+                        const pathTarget = (urlObj.pathname || '/') + (urlObj.search || '');
+                        linesToFilter[0] = `${reqLineMatch[1]} ${pathTarget} ${reqLineMatch[3]}`;
+                    } catch (e) {
+                        // Ignore error, keep original line if parsing fails
+                    }
+                }
+
+                const safeHeaderText = linesToFilter
                     .filter(line => {
                         const lower = line.toLowerCase();
                         return !lower.startsWith('proxy-authorization:') && !lower.startsWith('proxy-connection:');

@@ -59,7 +59,7 @@ class ConnectionManager {
             if (!payload) return;
 
             // Enforce Max Connections
-            if (this.connections.size >= this.maxConnections) {
+            if ((this.connections.size + this.pendingConnections.size) >= this.maxConnections) {
                 console.warn(`[ConnectionManager] Rejecting connection ${connectionId}: Max limit reached (${this.maxConnections})`);
                 this.sendFrame(TYPES.CLOSE, connectionId);
                 return;
@@ -92,7 +92,7 @@ class ConnectionManager {
             }
 
             // Real SSRF Protection via DNS Resolution
-            this.pendingConnections.set(connectionId, []); // Init queue
+            this.pendingConnections.set(connectionId, { queue: [], size: 0 }); // Init queue
 
             dns.lookup(host, { family: 4 }, (err, address, family) => {
                 // Check if connection was closed during DNS resolution
@@ -129,10 +129,10 @@ class ConnectionManager {
                 this.connections.set(connectionId, socket);
 
                 // Replay buffered early data
-                const queuedData = this.pendingConnections.get(connectionId);
+                const pendingData = this.pendingConnections.get(connectionId);
                 this.pendingConnections.delete(connectionId);
-                if (queuedData && queuedData.length > 0) {
-                    for (const chunk of queuedData) {
+                if (pendingData && pendingData.queue.length > 0) {
+                    for (const chunk of pendingData.queue) {
                         socket.write(chunk);
                     }
                 }
@@ -193,12 +193,12 @@ class ConnectionManager {
             } else if (this.pendingConnections.has(connectionId)) {
                 // Buffer early data until DNS/connect completes
                 if (payload && payload.length > 0) {
-                    const queue = this.pendingConnections.get(connectionId);
-                    queue.push(payload);
+                    const pendingData = this.pendingConnections.get(connectionId);
+                    pendingData.queue.push(payload);
+                    pendingData.size += payload.length;
 
                     // Prevent OOM: if the queued data exceeds the max socket buffer size
-                    const totalQueuedSize = queue.reduce((acc, buf) => acc + (buf ? buf.length : 0), 0);
-                    if (totalQueuedSize > this.maxSocketBuffer) {
+                    if (pendingData.size > this.maxSocketBuffer) {
                         console.warn(`[ConnectionManager] Destroying connection ${connectionId} due to massive early data buffer during DNS resolution.`);
                         this.sendFrame(TYPES.CLOSE, connectionId);
                         this.pendingConnections.delete(connectionId);

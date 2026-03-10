@@ -106,6 +106,8 @@ curl -U admin:securepassword123 -x http://YOUR_VPS_IP:3128 https://api.ipify.org
 - **Proxy Authentication:** Fully standard `Proxy-Authorization` header parsing implemented natively at the TCP packet level.
 - **Hostname Validation:** The client enforces a `MAX_HOSTNAME_SIZE` (default 2KB) to prevent memory exhaustion from maliciously long target addresses.
 - **Zero-JSON Transport:** To maximize throughput, the system encodes routing metadata into a minimal `[ Type(1B) | ConnectionID(4B) | PayloadLength(4B) ]` binary buffer on top of the WebSocket payloads.
+- **IPv6 Support:** Native support for IPv6 target addresses (e.g., `[::1]:80`) in `CONNECT` and `GET` requests, correctly handled during parsing and DNS resolution.
+- **Replay Attack Prevention (Advanced):** Strict sequence number tracking within GCM-encrypted frames ensures that intercepted packets cannot be replayed or dropped without triggering an immediate disconnect.
 
 ---
 
@@ -176,3 +178,11 @@ ENABLE_ENCRYPTION=true
 ENCRYPTION_SECRET=some_super_long_custom_random_string
 ```
 Every single multiplexed payload will be symmetrically encrypted natively in Node.js before being pushed through the `ws://` pipe. Any Middle-Man sniffing the WebSocket frames will only see random AES garbage bytes. Note: High-throughput connections (e.g. 500Mbps+) might slightly tax the Raspberry Pi CPU compared to kernel-level Nginx TLS.
+
+### Environment Customization
+
+You can fine-tune the security behavior in your `.env` file:
+
+- `STRICT_SEQUENCE_CHECK=true`: Rejects packets that arrive out of order (strongest protection).
+- `REWRITE_PROXY_URLS=true`: Rewrites absolute URLs to paths for better target compatibility.
+- `HANDSHAKE_TIMEOUT_MS=300000`: Adjusts the allowed clock drift for secure handshakes (default 5m).

@@ -16,6 +16,7 @@ class TunnelServer extends EventEmitter {
         this.pingInterval = null;
 
         this.secureHandshake = process.env.ENABLE_SECURE_HANDSHAKE === 'true';
+        this.handshakeTimeoutLimit = process.env.HANDSHAKE_TIMEOUT_MS ? parseInt(process.env.HANDSHAKE_TIMEOUT_MS, 10) : 5 * 60 * 1000;
         this.usedNonces = new Map();
         // Clear used nonces periodically to prevent memory leaks, but only remove expired ones
         setInterval(() => this.cleanupExpiredNonces(), 60 * 1000); // Check every minute
@@ -48,8 +49,8 @@ class TunnelServer extends EventEmitter {
                         return;
                     }
 
-                    // Allow 5 minutes of clock drift between Client and Server
-                    if (Math.abs(Date.now() - parseInt(timestamp, 10)) > 5 * 60 * 1000) {
+                    // Allow configurable clock drift between Client and Server (Default 5 min)
+                    if (Math.abs(Date.now() - parseInt(timestamp, 10)) > this.handshakeTimeoutLimit) {
                         console.warn(`[TunnelServer] Rejected: Timestamp drift too large`);
                         ws.close(1008, 'Unauthorized');
                         return;
@@ -149,9 +150,9 @@ class TunnelServer extends EventEmitter {
 
     cleanupExpiredNonces() {
         const now = Date.now();
+        const expiry = this.handshakeTimeoutLimit + 60000; // Add 1min grace
         for (const [nonce, timestamp] of this.usedNonces.entries()) {
-            // If the nonce timestamp is older than 5 minutes + 1 minute grace period for drift, remove it
-            if (now - timestamp > 6 * 60 * 1000) {
+            if (now - timestamp > expiry) {
                 this.usedNonces.delete(nonce);
             }
         }

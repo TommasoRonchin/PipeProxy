@@ -2,6 +2,7 @@ const crypto = require('crypto');
 
 let key = null;
 let isEncryptionEnabled = false;
+let isStrictSequenceEnabled = true;
 
 // Replay attack prevention: sequence numbers
 let outSeq = 0;
@@ -9,10 +10,9 @@ let expectedInSeq = 0;
 
 function initCrypto() {
     isEncryptionEnabled = process.env.ENABLE_ENCRYPTION === 'true';
-    if (isEncryptionEnabled) {
-        const secret = process.env.ENCRYPTION_SECRET || 'default_secret';
-        key = crypto.createHash('sha256').update(secret).digest();
-    }
+    const secret = process.env.ENCRYPTION_SECRET || 'default_secret';
+    key = crypto.createHash('sha256').update(secret).digest();
+    isStrictSequenceEnabled = process.env.STRICT_SEQUENCE_CHECK !== 'false';
     outSeq = 0;
     expectedInSeq = 0;
 }
@@ -73,9 +73,15 @@ function decryptMessage(buffer) {
 
     const seq = decryptedPayloadWithSeq.readUInt32BE(0);
 
-    // Expected strict incrementing. If it's less than expected, we reject as a replay!
-    if (seq < expectedInSeq) {
-        throw new Error(`Replay Attack Detected: Received sequence ${seq}, expected at least ${expectedInSeq}`);
+    // Expected strict incrementing. If it's not exactly what we expect, we reject as a replay or dropped frame!
+    if (isStrictSequenceEnabled) {
+        if (seq !== expectedInSeq) {
+            throw new Error(`Replay Attack Detected: Received sequence ${seq}, expected exactly ${expectedInSeq}`);
+        }
+    } else {
+        if (seq < expectedInSeq) {
+            throw new Error(`Replay Attack Detected: Received sequence ${seq}, expected at least ${expectedInSeq}`);
+        }
     }
 
     // Update our tracker for the next acceptable message

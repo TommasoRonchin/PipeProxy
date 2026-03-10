@@ -26,6 +26,7 @@ const TLS_KEY_PATH = process.env.TLS_KEY_PATH;
 const MAX_PROXY_HEADER_SIZE = process.env.MAX_PROXY_HEADER_SIZE ? parseInt(process.env.MAX_PROXY_HEADER_SIZE, 10) : 8192;
 const MAX_PROXY_TIMEOUT_MS = process.env.MAX_PROXY_TIMEOUT_MS ? parseInt(process.env.MAX_PROXY_TIMEOUT_MS, 10) : 10000;
 const REWRITE_PROXY_URLS = process.env.REWRITE_PROXY_URLS !== 'false'; // Default true
+const FORCE_CONNECTION_CLOSE = process.env.FORCE_CONNECTION_CLOSE !== 'false'; // Default true
 const MAX_CONCURRENT_PROXY_CONNECTIONS = process.env.MAX_CONCURRENT_PROXY_CONNECTIONS ? parseInt(process.env.MAX_CONCURRENT_PROXY_CONNECTIONS, 10) : 500;
 
 let activeProxyConnections = 0;
@@ -264,7 +265,7 @@ const proxyConnectionHandler = (socket) => {
                         const headerName = line.substring(0, colonIdx).trim().toLowerCase();
                         return !hopByHopHeaders.includes(headerName);
                     })
-                    .join('\r\n') + '\r\n\r\n';
+                    .join('\r\n') + (FORCE_CONNECTION_CLOSE ? '\r\nConnection: close\r\n\r\n' : '\r\n\r\n');
 
                 const safeHeaderBuffer = Buffer.concat([Buffer.from(safeHeaderText, 'utf8'), extraData]);
 
@@ -280,6 +281,10 @@ const proxyConnectionHandler = (socket) => {
 // 1. Initialize logic components and check configuration
 const tunnelServer = new TunnelServer({ port: TUNNEL_PORT, secret: TUNNEL_SECRET });
 const protocol = new FrameProtocol(tunnelServer);
+
+tunnelServer.on('error', (err) => {
+    console.error(`[ProxyServer] TunnelServer Runtime Error: ${err.message}`);
+});
 
 // 2. Prepare the Proxy Server (TLS or Plain TCP)
 let proxyServer;

@@ -73,7 +73,14 @@ class TunnelServer extends EventEmitter {
                         }
 
                         // Allow configurable clock drift between Client and Server (Default 5 min)
-                        if (Math.abs(Date.now() - parseInt(timestamp, 10)) > this.handshakeTimeoutLimit) {
+                        const parsedTimestamp = parseInt(timestamp, 10);
+                        if (isNaN(parsedTimestamp)) {
+                            console.warn(`[TunnelServer] Rejected: Malformed timestamp`);
+                            ws.close(1008, 'Unauthorized');
+                            return;
+                        }
+
+                        if (Math.abs(Date.now() - parsedTimestamp) > this.handshakeTimeoutLimit) {
                             console.warn(`[TunnelServer] Rejected: Timestamp drift too large`);
                             ws.close(1008, 'Unauthorized');
                             return;
@@ -98,7 +105,7 @@ class TunnelServer extends EventEmitter {
                             return;
                         }
 
-                        this.usedNonces.set(nonce, parseInt(timestamp, 10));
+                        this.usedNonces.set(nonce, parsedTimestamp);
                     } else {
                         const authHeader = req.headers['x-tunnel-secret'];
                         if (!timingSafeEqual(authHeader, this.secret)) {

@@ -7,6 +7,9 @@ class FrameProtocol {
         this.connections = new Map();
         this.nextConnectionId = 1;
 
+        const envMaxBuffer = parseInt(process.env.MAX_SOCKET_BUFFER_MB, 10);
+        this.maxSocketBuffer = isNaN(envMaxBuffer) ? (1 * 1024 * 1024) : (envMaxBuffer * 1024 * 1024);
+
         // Listen to incoming frames from the tunnel
         this.tunnelServer.on('frame', (frame) => this.handleIncomingFrame(frame));
 
@@ -30,8 +33,16 @@ class FrameProtocol {
             // Backpressure logic: if socket.write returns false, 
             // we could pause reading from the tunnel but for a multiplexed WS it's tricky.
             // We'll write to the socket buffer with standard Node.js mechanisms.
+            // Buffer limit check to prevent OOM
             if (payload && payload.length > 0) {
-                socket.write(payload);
+                if (!socket.write(payload)) {
+                    if (socket.writableLength > this.maxSocketBuffer) {
+                        console.warn(`[FrameProtocol] Destroying socket ${connectionId} due to massive backpressure buffer.`);
+                        this.tunnelServer.sendFrame(TYPES.CLOSE, connectionId);
+                        socket.destroy();
+                        this.connections.delete(connectionId);
+                    }
+                }
             }
         } else if (type === TYPES.CLOSE) {
             socket.end();

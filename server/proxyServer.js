@@ -77,13 +77,14 @@ const proxyConnectionHandler = (socket) => {
 
     // Slowloris Connection Exhaustion Protection
     socket.setTimeout(MAX_PROXY_TIMEOUT_MS);
-    socket.once('timeout', () => {
+    const initialTimeoutHandler = () => {
         if (!resolved) {
             console.warn(`[ProxyServer] Connection timed out during header parsing`);
             socket.end('HTTP/1.1 408 Request Timeout\r\n\r\n');
             socket.destroy();
         }
-    });
+    };
+    socket.once('timeout', initialTimeoutHandler);
 
     const onData = (chunk) => {
         if (resolved) return;
@@ -102,7 +103,16 @@ const proxyConnectionHandler = (socket) => {
         if (headerEndIdx !== -1) {
             resolved = true;
             socket.removeListener('data', onData);
-            socket.setTimeout(0); // clear timeout once headers are parsed
+            socket.removeListener('timeout', initialTimeoutHandler);
+
+            // Set Idle Timeout to prevent connections from hanging indefinitely
+            const IDLE_TIMEOUT_MS = process.env.IDLE_TIMEOUT_MS ? parseInt(process.env.IDLE_TIMEOUT_MS, 10) : 60000;
+            socket.setTimeout(IDLE_TIMEOUT_MS);
+            socket.on('timeout', () => {
+                console.warn(`[ProxyServer] Connection idle timeout reached, closing socket`);
+                socket.end();
+                socket.destroy();
+            });
 
             const headerText = headerBuffer.subarray(0, headerEndIdx).toString('utf8');
 
@@ -263,6 +273,10 @@ if (ENABLE_TLS_PROXY) {
     proxyServer = net.createServer(proxyConnectionHandler);
     console.log(`[ProxyServer] Plain TCP HTTP Proxy enabled (No TLS) for port ${PROXY_PORT}`);
 }
+
+proxyServer.on('error', (err) => {
+    console.error(`[ProxyServer] Global Server Error: ${err.message}`);
+});
 
 // 3. Start components
 (async () => {

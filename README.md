@@ -99,15 +99,15 @@ curl -U admin:securepassword123 -x http://YOUR_VPS_IP:3128 https://api.ipify.org
 
 ## 🛠️ Advanced Features
 
-- **Backpressure Handling:** The client tracks TCP buffer saturation. If a single destination socket fills beyond the `MAX_SOCKET_BUFFER_MB` (default 1MB) high-watermark, the specific stream is gracefully terminated without affecting the rest of the tunnel.
+- **Backpressure Handling:** The client and server track TCP buffer saturation. If a single destination socket fills beyond the `MAX_SOCKET_BUFFER_MB` (default 1MB) high-watermark, the specific stream is gracefully terminated without affecting the rest of the tunnel to prevent Out-Of-Memory crashes.
 - **SSRF Protection:** The client natively prevents Server-Side Request Forgery by blocking incoming connection requests attempting to reach local IP ranges (`127.0.0.0/8`, `192.168.*`, `10.*`, etc.), protecting your home/corporate network.
 - **OOM Protection (Tunnel):** The built-in frame decoder protects against memory exhaustion attacks by strictly enforcing a `MAX_FRAME_SIZE` (default 10MB) on multiplexed payloads. Flow-control backpressure is also managed using `WS_HIGH_WATER_MARK_MB` (default 10) and `WS_LOW_WATER_MARK_MB` (default 2) which dynamically pause rapid local TCP sockets if the WebSocket tunnel struggles to keep up over slow connections.
-- **OOM Protection (Proxy):** The proxy server strictly verifies headers avoiding infinite Slowloris buffer leaks via the `MAX_PROXY_HEADER_SIZE` (default 8KB) and `MAX_PROXY_TIMEOUT_MS` (default 10s) settings.
+- **OOM Protection (Proxy):** The proxy server strictly verifies headers avoiding infinite Slowloris buffer leaks via the `MAX_PROXY_HEADER_SIZE` (default 8KB) and `MAX_PROXY_TIMEOUT_MS` (default 10s) settings. Connections are also dropped if they stay idle for too long without exchanging data, controlled by `IDLE_TIMEOUT_MS` (default 60s).
 - **Proxy Authentication:** Fully standard `Proxy-Authorization` header parsing implemented natively at the TCP packet level.
 - **Hostname Validation:** The client enforces a `MAX_HOSTNAME_SIZE` (default 2KB) to prevent memory exhaustion from maliciously long target addresses.
 - **Zero-JSON Transport:** To maximize throughput, the system encodes routing metadata into a minimal `[ Type(1B) | ConnectionID(4B) | PayloadLength(4B) ]` binary buffer on top of the WebSocket payloads.
 - **IPv6 Support:** Native support for IPv6 target addresses (e.g., `[::1]:80`) in `CONNECT` and `GET` requests, correctly handled during parsing and DNS resolution.
-- **Replay Attack Prevention (Advanced):** Strict sequence number tracking within GCM-encrypted frames ensures that intercepted packets cannot be replayed or dropped without triggering an immediate disconnect.
+- **Replay Attack Prevention (Advanced):** Strict sequence number tracking within GCM-encrypted frames ensures that intercepted packets cannot be replayed or dropped without triggering an immediate disconnect. Furthermore, rapid reconnections causing memory/service DoS (flapping) are prevented via the `RATE_LIMIT_MS` (default 1000ms) setting.
 
 ---
 

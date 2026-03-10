@@ -109,6 +109,16 @@ class TunnelServer extends EventEmitter {
 
                 console.log(`[TunnelServer] Raspberry Pi connected from ${req.socket.remoteAddress}`);
 
+                // Rate limiting to prevent DoS by rapid connection flapping
+                const RATE_LIMIT_MS = process.env.RATE_LIMIT_MS ? parseInt(process.env.RATE_LIMIT_MS, 10) : 1000;
+                const now = Date.now();
+                if (this.lastConnectionTime && (now - this.lastConnectionTime < RATE_LIMIT_MS)) {
+                    console.warn(`[TunnelServer] Rate limiting tunnel connection from ${req.socket.remoteAddress} (flapping detected)`);
+                    ws.close(1008, 'Rate limited');
+                    return;
+                }
+                this.lastConnectionTime = now;
+
                 // If there's an existing connection, drop it
                 if (this.activeWs) {
                     console.log(`[TunnelServer] Dropping previous tunnel connection`);

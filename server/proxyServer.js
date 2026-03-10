@@ -1,4 +1,14 @@
 const fs = require('fs');
+
+process.on('uncaughtException', (err) => {
+    console.error(`[ProxyServer] Uncaught Exception: ${err.message}`, err);
+    process.exit(1);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error(`[ProxyServer] Unhandled Rejection:`, reason);
+});
+
 if (process.env.SKIP_DOTENV !== 'true') {
     if (fs.existsSync('.env')) {
         require('dotenv').config({ path: '.env' });
@@ -311,6 +321,10 @@ if (ENABLE_TLS_PROXY) {
 
 proxyServer.on('error', (err) => {
     console.error(`[ProxyServer] Global Server Error: ${err.message}`);
+    if (err.code === 'EADDRINUSE') {
+        console.error(`[ProxyServer] CRITICAL: Proxy port ${PROXY_PORT} is already in use.`);
+        process.exit(1);
+    }
 });
 
 // 3. Start components

@@ -1,4 +1,13 @@
 const fs = require('fs');
+
+process.on('uncaughtException', (err) => {
+    console.error(`[RaspberryClient] Uncaught Exception: ${err.message}`, err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error(`[RaspberryClient] Unhandled Rejection:`, reason);
+});
+
 if (process.env.SKIP_DOTENV !== 'true') {
     if (fs.existsSync('.env')) {
         require('dotenv').config({ path: '.env' });
@@ -47,8 +56,25 @@ function connect() {
     const ws = new WebSocket(SERVER_URL, options);
     const manager = new ConnectionManager(ws, cryptoStream);
 
+    let pingTimeout;
+
+    function heartbeat() {
+        clearTimeout(pingTimeout);
+        // Timeout relies on server PING_INTERVAL_MS. Default is 30s, we add a 5s grace period.
+        const timeoutMs = process.env.PING_INTERVAL_MS ? parseInt(process.env.PING_INTERVAL_MS, 10) + 5000 : 35000;
+        pingTimeout = setTimeout(() => {
+            console.warn(`[RaspberryClient] No ping received from server in ${timeoutMs}ms. Connection might be dead. Terminating...`);
+            ws.terminate();
+        }, timeoutMs);
+    }
+
     ws.on('open', () => {
         console.log(`[RaspberryClient] Connected to VPS Tunnel successfully.`);
+        heartbeat();
+    });
+
+    ws.on('ping', () => {
+        heartbeat();
     });
 
     ws.on('message', (data) => {
@@ -65,6 +91,7 @@ function connect() {
     });
 
     ws.on('close', () => {
+        clearTimeout(pingTimeout);
         console.log(`[RaspberryClient] Disconnected from VPS Tunnel. Reconnecting in ${RECONNECT_DELAY_MS}ms...`);
         manager.closeAllConnections();
         setTimeout(connect, RECONNECT_DELAY_MS);

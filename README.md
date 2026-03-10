@@ -188,5 +188,5 @@ You can fine-tune the security behavior in your `.env` file:
 - `REWRITE_PROXY_URLS=true`: Rewrites absolute URLs to paths for better target compatibility.
 - `HANDSHAKE_TIMEOUT_MS=300000`: Adjusts the allowed clock drift for secure handshakes (default 5m).
 - `MAX_NONCE_TRACKING_SIZE=100000`: Limits memory usage by capping the number of stored nonces used for handshake replay protection. (Default: 100k).
-- `PING_INTERVAL_MS=30000`: Heartbeat interval for the server to detect and drop disconnected ghost clients (default 30s).
+- `PING_INTERVAL_MS=30000`: Heartbeat interval for both the server (to detect and drop ghost clients) and the client (to forcefully reconnect if the tunnel hangs). (Default 30s).
 - `RECONNECT_DELAY_MS=3000`: Delay before the client attempts to reconnect on tunnel failure (default 3s).

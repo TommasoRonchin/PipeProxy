@@ -6,8 +6,9 @@ const dns = require('dns');
 const ipaddr = require('ipaddr.js');
 
 class ConnectionManager {
-    constructor(ws) {
+    constructor(ws, cryptoStream) {
         this.ws = ws;
+        this.cryptoStream = cryptoStream;
         this.connections = new Map();
         this.pendingConnections = new Map(); // Buffer early data while DNS resolves
         this.decoder = new FrameDecoder();
@@ -49,7 +50,7 @@ class ConnectionManager {
     sendFrame(type, connId, payload = null) {
         if (this.ws.readyState === 1) { // 1 is WebSocket.OPEN
             const frame = encodeFrame(type, connId, payload);
-            const encrypted = encryptMessage(frame);
+            const encrypted = this.cryptoStream.encryptMessage(frame);
             this.ws.send(encrypted, { binary: true });
         }
     }

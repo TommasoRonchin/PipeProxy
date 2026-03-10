@@ -42,7 +42,8 @@ function validateAuth(headerText) {
     const username = credentials.substring(0, splitIdx);
     const password = credentials.substring(splitIdx + 1);
 
-    return username === PROXY_AUTH_USERNAME && password === PROXY_AUTH_PASSWORD;
+    const { timingSafeEqual } = require('../shared/cryptoStream');
+    return timingSafeEqual(username, PROXY_AUTH_USERNAME) && timingSafeEqual(password, PROXY_AUTH_PASSWORD);
 }
 
 

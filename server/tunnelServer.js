@@ -2,7 +2,7 @@ const { WebSocketServer } = require('ws');
 const { EventEmitter } = require('events');
 const FrameDecoder = require('../shared/frameDecoder');
 const { encodeFrame } = require('../shared/frameEncoder');
-const { encryptMessage, decryptMessage, resetCryptoStream } = require('../shared/cryptoStream');
+const { encryptMessage, decryptMessage, timingSafeEqual, CryptoStream } = require('../shared/cryptoStream');
 const crypto = require('crypto');
 
 class TunnelServer extends EventEmitter {
@@ -18,6 +18,10 @@ class TunnelServer extends EventEmitter {
         this.secureHandshake = process.env.ENABLE_SECURE_HANDSHAKE === 'true';
         this.handshakeTimeoutLimit = process.env.HANDSHAKE_TIMEOUT_MS ? parseInt(process.env.HANDSHAKE_TIMEOUT_MS, 10) : 5 * 60 * 1000;
         this.usedNonces = new Map();
+
+        // Per-connection crypto stream (initialized on connection)
+        this.cryptoStream = null;
+
         // Clear used nonces periodically to prevent memory leaks, but only remove expired ones
         setInterval(() => this.cleanupExpiredNonces(), 60 * 1000); // Check every minute
     }
@@ -63,7 +67,7 @@ class TunnelServer extends EventEmitter {
                     }
 
                     const expectedSignature = crypto.createHmac('sha256', this.secret).update(timestamp + nonce).digest('hex');
-                    if (signature !== expectedSignature) {
+                    if (!timingSafeEqual(signature, expectedSignature)) {
                         console.warn(`[TunnelServer] Rejected: Invalid signature`);
                         ws.close(1008, 'Unauthorized');
                         return;
@@ -72,7 +76,7 @@ class TunnelServer extends EventEmitter {
                     this.usedNonces.set(nonce, parseInt(timestamp, 10));
                 } else {
                     const authHeader = req.headers['x-tunnel-secret'];
-                    if (authHeader !== this.secret) {
+                    if (!timingSafeEqual(authHeader, this.secret)) {
                         console.warn(`[TunnelServer] Rejected connection from ${req.socket.remoteAddress}: Invalid secret`);
                         ws.close(1008, 'Unauthorized');
                         return;
@@ -88,8 +92,12 @@ class TunnelServer extends EventEmitter {
                 this.activeWs.close(1000, 'New connection established');
             }
 
-            // Reset Sequence Counters for Replay Attack Prevention
-            resetCryptoStream();
+            // Initialize/Reset Crypto Stream for the new connection
+            this.cryptoStream = new CryptoStream({
+                enableEncryption: process.env.ENABLE_ENCRYPTION === 'true',
+                secret: process.env.ENCRYPTION_SECRET,
+                strictSequence: process.env.STRICT_SEQUENCE_CHECK !== 'false'
+            });
 
             this.activeWs = ws;
             const decoder = new FrameDecoder();
@@ -101,7 +109,7 @@ class TunnelServer extends EventEmitter {
 
             ws.on('message', (data) => {
                 try {
-                    const decrypted = decryptMessage(data);
+                    const decrypted = this.cryptoStream.decryptMessage(data);
                     decoder.push(decrypted);
                 } catch (e) {
                     console.error(`[TunnelServer] Decryption failed, dropping connection: ${e.message}`);
@@ -167,7 +175,7 @@ class TunnelServer extends EventEmitter {
         }
 
         const frame = encodeFrame(type, connectionId, payload);
-        const encrypted = encryptMessage(frame);
+        const encrypted = this.cryptoStream.encryptMessage(frame);
         this.activeWs.send(encrypted, { binary: true });
         return true;
     }

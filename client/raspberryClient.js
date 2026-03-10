@@ -37,11 +37,15 @@ function connect() {
         }
     }
 
-    // Reset Sequence Counters for Replay Attack Prevention when connecting
-    resetCryptoStream();
+    const { CryptoStream } = require('../shared/cryptoStream');
+    const cryptoStream = new CryptoStream({
+        enableEncryption: process.env.ENABLE_ENCRYPTION === 'true',
+        secret: process.env.ENCRYPTION_SECRET,
+        strictSequence: process.env.STRICT_SEQUENCE_CHECK !== 'false'
+    });
 
     const ws = new WebSocket(SERVER_URL, options);
-    const manager = new ConnectionManager(ws);
+    const manager = new ConnectionManager(ws, cryptoStream);
 
     ws.on('open', () => {
         console.log(`[RaspberryClient] Connected to VPS Tunnel successfully.`);
@@ -49,7 +53,7 @@ function connect() {
 
     ws.on('message', (data) => {
         try {
-            manager.handleMessage(decryptMessage(data));
+            manager.handleMessage(cryptoStream.decryptMessage(data));
         } catch (e) {
             console.error(`[RaspberryClient] Decryption failed: ${e.message}`);
         }

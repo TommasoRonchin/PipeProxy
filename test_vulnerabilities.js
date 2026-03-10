@@ -2,6 +2,8 @@ const ConnectionManager = require('./client/connectionManager');
 const FrameProtocol = require('./server/frameProtocol');
 const { TYPES } = require('./shared/frameEncoder');
 const { EventEmitter } = require('events');
+const { CryptoStream } = require('./shared/cryptoStream');
+const mockCrypto = new CryptoStream({ enableEncryption: false });
 
 console.log('--- Testing Null/Empty Data Payloads ---');
 try {
@@ -10,7 +12,7 @@ try {
     mockWs.readyState = 1;
 
     // Test Client
-    const manager = new ConnectionManager(mockWs);
+    const manager = new ConnectionManager(mockWs, mockCrypto);
     manager.handleFrame({ type: TYPES.OPEN, connectionId: 1, payload: Buffer.from('google.com:80') });
     manager.handleFrame({ type: TYPES.DATA, connectionId: 1, payload: null });
     manager.handleFrame({ type: TYPES.DATA, connectionId: 1, payload: Buffer.alloc(0) });
@@ -46,7 +48,7 @@ const mockWs2 = new EventEmitter();
 mockWs2.send = () => { };
 mockWs2.readyState = 1;
 
-const manager2 = new ConnectionManager(mockWs2);
+const manager2 = new ConnectionManager(mockWs2, mockCrypto);
 // Initiate an OPEN frame which triggers dns.lookup
 manager2.handleFrame({ type: TYPES.OPEN, connectionId: 2, payload: Buffer.from('google.com:443') });
 // Immediately send CLOSE to simulate an aborted connection before DNS finishes

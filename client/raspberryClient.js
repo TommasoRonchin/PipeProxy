@@ -9,7 +9,7 @@ if (process.env.SKIP_DOTENV !== 'true') {
 const WebSocket = require('ws');
 const crypto = require('crypto');
 const ConnectionManager = require('./connectionManager');
-const { decryptMessage, resetCryptoStream } = require('../shared/cryptoStream');
+const { CryptoStream } = require('../shared/cryptoStream');
 
 const SERVER_URL = process.env.SERVER_URL || 'ws://localhost:8080';
 const TUNNEL_SECRET = process.env.TUNNEL_SECRET;
@@ -37,7 +37,6 @@ function connect() {
         }
     }
 
-    const { CryptoStream } = require('../shared/cryptoStream');
     const cryptoStream = new CryptoStream({
         enableEncryption: process.env.ENABLE_ENCRYPTION === 'true',
         secret: process.env.ENCRYPTION_SECRET,

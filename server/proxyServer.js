@@ -71,10 +71,6 @@ const proxyConnectionHandler = (socket) => {
     }
     activeProxyConnections++;
 
-    socket.on('close', () => {
-        activeProxyConnections--;
-    });
-
     // Slowloris Connection Exhaustion Protection
     // Use an absolute hard timer. socket.setTimeout resets on every byte received,
     // which allows an attacker to hold the connection open indefinitely by sending 1 byte very slowly.
@@ -85,6 +81,11 @@ const proxyConnectionHandler = (socket) => {
             socket.destroy();
         }
     }, MAX_PROXY_TIMEOUT_MS);
+
+    socket.on('close', () => {
+        activeProxyConnections--;
+        clearTimeout(hardTimeoutTimer);
+    });
 
     const onData = (chunk) => {
         if (resolved) return;
@@ -188,15 +189,39 @@ const proxyConnectionHandler = (socket) => {
             if (!connId) return;
 
             if (method === 'CONNECT') {
-                // Reply with 200 OK directly, don't forward CONNECT frame payload upstream
-                socket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+                const onOpenAck = (ackConnId) => {
+                    if (ackConnId === connId) {
+                        protocol.removeListener('open_ack', onOpenAck);
+                        protocol.removeListener('close', onClose);
+                        if (!socket.destroyed) {
+                            socket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+                            const extraData = headerBuffer.subarray(headerEndIdx + 4);
+                            if (extraData.length > 0) {
+                                const { TYPES } = require('../shared/frameEncoder');
+                                tunnelServer.sendFrame(TYPES.DATA, connId, extraData);
+                            }
+                        }
+                    }
+                };
 
-                // If there's extra data after \r\n\r\n, proxy it
-                const extraData = headerBuffer.subarray(headerEndIdx + 4);
-                if (extraData.length > 0) {
-                    const { TYPES } = require('../shared/frameEncoder');
-                    tunnelServer.sendFrame(TYPES.DATA, connId, extraData);
-                }
+                const onClose = (closeConnId) => {
+                    if (closeConnId === connId) {
+                        protocol.removeListener('open_ack', onOpenAck);
+                        protocol.removeListener('close', onClose);
+                        if (!socket.destroyed && socket.writable) {
+                            socket.end('HTTP/1.1 502 Bad Gateway\r\n\r\nConnection Refused by Target\r\n\r\n');
+                        }
+                        if (!socket.destroyed) socket.destroy();
+                    }
+                };
+
+                protocol.on('open_ack', onOpenAck);
+                protocol.on('close', onClose);
+
+                socket.on('close', () => {
+                    protocol.removeListener('open_ack', onOpenAck);
+                    protocol.removeListener('close', onClose);
+                });
             } else {
                 // For standard HTTP proxy request, forward the payload upstream.
                 // We must strip Proxy-Authorization to prevent credential leakage.
@@ -223,8 +248,7 @@ const proxyConnectionHandler = (socket) => {
                     'keep-alive',
                     'upgrade',
                     'te',
-                    'trailer',
-                    'transfer-encoding'
+                    'trailer'
                 ];
 
                 const safeHeaderText = linesToFilter

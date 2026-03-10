@@ -144,6 +144,7 @@ class ConnectionManager {
                 const socket = net.connect(socketOptions, () => {
                     console.log(`[DEBUG] net.connect successful to ${address}:${port}`);
                     // Connected! Data stream will start naturally.
+                    this.sendFrame(TYPES.OPEN_ACK, connectionId);
                 });
 
                 this.connections.set(connectionId, socket);
@@ -309,8 +310,7 @@ class ConnectionManager {
                 'private',
                 'reserved',
                 'carrierGradeNat',
-                'uniqueLocal', // IPv6 private
-                'ipv4Mapped' // e.g. ::ffff:127.0.0.1
+                'uniqueLocal' // IPv6 private
             ];
 
             if (blockedRanges.includes(range)) {

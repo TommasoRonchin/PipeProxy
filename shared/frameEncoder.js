@@ -4,6 +4,7 @@ const TYPES = {
     CLOSE: 3,
     PING: 4,
     PONG: 5,
+    OPEN_ACK: 6,
 };
 
 /**

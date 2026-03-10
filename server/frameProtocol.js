@@ -1,7 +1,9 @@
 const { TYPES } = require('../shared/frameEncoder');
+const { EventEmitter } = require('events');
 
-class FrameProtocol {
+class FrameProtocol extends EventEmitter {
     constructor(tunnelServer) {
+        super();
         this.tunnelServer = tunnelServer;
         // Map of connectionId -> socket
         this.connections = new Map();
@@ -47,6 +49,9 @@ class FrameProtocol {
         } else if (type === TYPES.CLOSE) {
             socket.end();
             this.connections.delete(connectionId);
+            this.emit('close', connectionId);
+        } else if (type === TYPES.OPEN_ACK) {
+            this.emit('open_ack', connectionId);
         }
     }
 

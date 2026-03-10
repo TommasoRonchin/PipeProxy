@@ -199,18 +199,20 @@ const proxyConnectionHandler = (socket) => {
             const connId = protocol.registerConnection(socket, host, port);
             if (!connId) return;
 
+            const extraData = headerBuffer.subarray(headerEndIdx + 4);
+            const { TYPES } = require('../shared/frameEncoder');
+
             if (method === 'CONNECT') {
+                if (extraData.length > 0) {
+                    tunnelServer.sendFrame(TYPES.DATA, connId, extraData);
+                }
+
                 const onOpenAck = (ackConnId) => {
                     if (ackConnId === connId) {
                         protocol.removeListener('open_ack', onOpenAck);
                         protocol.removeListener('close', onClose);
                         if (!socket.destroyed) {
                             socket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
-                            const extraData = headerBuffer.subarray(headerEndIdx + 4);
-                            if (extraData.length > 0) {
-                                const { TYPES } = require('../shared/frameEncoder');
-                                tunnelServer.sendFrame(TYPES.DATA, connId, extraData);
-                            }
                         }
                     }
                 };
@@ -236,7 +238,6 @@ const proxyConnectionHandler = (socket) => {
             } else {
                 // For standard HTTP proxy request, forward the payload upstream.
                 // We must strip Proxy-Authorization to prevent credential leakage.
-                const extraData = headerBuffer.subarray(headerEndIdx + 4);
 
                 const linesToFilter = headerText.split('\r\n');
 
@@ -279,7 +280,6 @@ const proxyConnectionHandler = (socket) => {
 
                 const safeHeaderBuffer = Buffer.concat([Buffer.from(safeHeaderText, 'utf8'), extraData]);
 
-                const { TYPES } = require('../shared/frameEncoder');
                 tunnelServer.sendFrame(TYPES.DATA, connId, safeHeaderBuffer);
             }
         }

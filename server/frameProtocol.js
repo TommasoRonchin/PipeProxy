@@ -4,6 +4,7 @@ const { EventEmitter } = require('events');
 class FrameProtocol extends EventEmitter {
     constructor(tunnelServer) {
         super();
+        this.setMaxListeners(0); // unlimited listeners to silence Node.js warning in high-concurrency environments (events are fully managed)
         this.tunnelServer = tunnelServer;
         // Map of connectionId -> socket
         this.connections = new Map();

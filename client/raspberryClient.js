@@ -14,6 +14,7 @@ const { CryptoStream } = require('../shared/cryptoStream');
 const SERVER_URL = process.env.SERVER_URL || 'ws://localhost:8080';
 const TUNNEL_SECRET = process.env.TUNNEL_SECRET;
 const ENABLE_SECURE_HANDSHAKE = process.env.ENABLE_SECURE_HANDSHAKE === 'true';
+const RECONNECT_DELAY_MS = process.env.RECONNECT_DELAY_MS ? parseInt(process.env.RECONNECT_DELAY_MS, 10) : 3000;
 
 function connect() {
     console.log(`[RaspberryClient] Connecting to VPS tunnel at ${SERVER_URL}...`);
@@ -59,9 +60,9 @@ function connect() {
     });
 
     ws.on('close', () => {
-        console.log(`[RaspberryClient] Disconnected from VPS Tunnel. Reconnecting in 3s...`);
+        console.log(`[RaspberryClient] Disconnected from VPS Tunnel. Reconnecting in ${RECONNECT_DELAY_MS}ms...`);
         manager.closeAllConnections();
-        setTimeout(connect, 3000);
+        setTimeout(connect, RECONNECT_DELAY_MS);
     });
 
     ws.on('error', (err) => {

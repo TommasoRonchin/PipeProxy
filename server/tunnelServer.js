@@ -17,6 +17,7 @@ class TunnelServer extends EventEmitter {
 
         this.secureHandshake = process.env.ENABLE_SECURE_HANDSHAKE === 'true';
         this.handshakeTimeoutLimit = process.env.HANDSHAKE_TIMEOUT_MS ? parseInt(process.env.HANDSHAKE_TIMEOUT_MS, 10) : 5 * 60 * 1000;
+        this.pingIntervalMs = process.env.PING_INTERVAL_MS ? parseInt(process.env.PING_INTERVAL_MS, 10) : 30000;
         this.usedNonces = new Map();
         this.maxNonceTrackingSize = process.env.MAX_NONCE_TRACKING_SIZE ? parseInt(process.env.MAX_NONCE_TRACKING_SIZE, 10) : 100000;
 
@@ -41,19 +42,20 @@ class TunnelServer extends EventEmitter {
                     this.wss.removeListener('error', onStartupError);
                     console.log(`[TunnelServer] Listening for Raspberry Pi on port ${this.port}`);
                     resolve();
+
+                    // For future errors after successful startup
+                    this.wss.on('error', (err) => {
+                        console.error(`[TunnelServer] WSS Runtime Error: ${err.message}`);
+                        this.emit('error', err);
+                    });
                 };
 
                 this.wss.once('error', onStartupError);
                 this.wss.once('listening', onListening);
 
-                // For future errors after successful startup
-                this.wss.on('error', (err) => {
-                    console.error(`[TunnelServer] WSS Runtime Error: ${err.message}`);
-                    this.emit('error', err);
-                });
-
             } catch (err) {
                 reject(err);
+                return;
             }
 
             this.wss.on('connection', (ws, req) => {
@@ -127,8 +129,8 @@ class TunnelServer extends EventEmitter {
                     this.activeWs.close(1000, 'New connection established');
                 }
 
-                // Initialize/Reset Crypto Stream for the new connection
-                this.cryptoStream = new CryptoStream({
+                // Initialize Crypto Stream exclusively for this new socket connection
+                ws.cryptoStream = new CryptoStream({
                     enableEncryption: process.env.ENABLE_ENCRYPTION === 'true',
                     secret: process.env.ENCRYPTION_SECRET,
                     strictSequence: process.env.STRICT_SEQUENCE_CHECK !== 'false'
@@ -144,7 +146,7 @@ class TunnelServer extends EventEmitter {
 
                 ws.on('message', (data) => {
                     try {
-                        const decrypted = this.cryptoStream.decryptMessage(data);
+                        const decrypted = ws.cryptoStream.decryptMessage(data);
                         decoder.push(decrypted);
                     } catch (e) {
                         console.error(`[TunnelServer] Decryption failed, dropping connection: ${e.message}`);
@@ -185,7 +187,7 @@ class TunnelServer extends EventEmitter {
                     }
                     this.isAlive = false;
                     this.activeWs.ping(); // standard ws ping frame
-                }, 30000); // 30 seconds
+                }, this.pingIntervalMs);
 
                 this.emit('tunnel_ready');
             });
@@ -202,13 +204,15 @@ class TunnelServer extends EventEmitter {
             this.pingInterval = null;
         }
         if (this.wss) {
+            if (this.wss.clients) {
+                for (const client of this.wss.clients) {
+                    client.terminate();
+                }
+            }
             this.wss.close();
             this.wss = null;
         }
-        if (this.activeWs) {
-            this.activeWs.terminate();
-            this.activeWs = null;
-        }
+        this.activeWs = null;
     }
 
     cleanupExpiredNonces() {
@@ -230,9 +234,15 @@ class TunnelServer extends EventEmitter {
         }
 
         const frame = encodeFrame(type, connectionId, payload);
-        const encrypted = this.cryptoStream.encryptMessage(frame);
-        this.activeWs.send(encrypted, { binary: true });
-        return true;
+        const encrypted = this.activeWs.cryptoStream.encryptMessage(frame);
+
+        try {
+            this.activeWs.send(encrypted, { binary: true });
+            return true;
+        } catch (e) {
+            console.error(`[TunnelServer] Error sending frame: ${e.message}`);
+            return false;
+        }
     }
 
     isReady() {

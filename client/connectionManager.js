@@ -23,6 +23,15 @@ class ConnectionManager {
 
         this.blockLocalNetwork = process.env.BLOCK_LOCAL_NETWORK !== 'false'; // Default to true for security
 
+        // Websocket Backpressure Settings
+        const envHighMem = parseInt(process.env.WS_HIGH_WATER_MARK_MB, 10);
+        const envLowMem = parseInt(process.env.WS_LOW_WATER_MARK_MB, 10);
+        this.wsHighWaterMark = isNaN(envHighMem) ? (10 * 1024 * 1024) : (envHighMem * 1024 * 1024); // Default 10MB
+        this.wsLowWaterMark = isNaN(envLowMem) ? (2 * 1024 * 1024) : (envLowMem * 1024 * 1024);   // Default 2MB
+
+        // Backpressure monitor loops
+        this.drainInterval = setInterval(() => this.checkDrain(), 100);
+
         // Wire the decoder output to handle individual logic frames
         this.decoder.on('frame', (frame) => this.handleFrame(frame));
 
@@ -67,6 +76,13 @@ class ConnectionManager {
             const parts = targetStr.split(':');
             const host = parts[0];
             const port = parseInt(parts[1], 10) || 80;
+
+            // Validate port to prevent unhandled RangeError from net.connect
+            if (isNaN(port) || port <= 0 || port > 65535) {
+                console.warn(`[ConnectionManager] Rejecting connection ${connectionId}: Invalid port ${port}`);
+                this.sendFrame(TYPES.CLOSE, connectionId);
+                return;
+            }
 
             // SSRF Protection: Block access to local network IPs
             if (this.blockLocalNetwork && this.isLocalNetwork(host)) {
@@ -116,8 +132,15 @@ class ConnectionManager {
                 }
 
                 socket.on('data', (data) => {
-                    console.log(`[DEBUG] Received ${data.length} bytes from ${address}:${port}`);
+                    // console.log(`[DEBUG] Received ${data.length} bytes from ${address}:${port}`);
                     this.sendFrame(TYPES.DATA, connectionId, data);
+
+                    // Check if WebSocket buffer is getting too full
+                    if (this.ws.bufferedAmount > this.wsHighWaterMark && !socket.isPaused) {
+                        socket.pause();
+                        socket.isPaused = true;
+                        // console.warn(`[ConnectionManager] Pausing socket ${connectionId} due to WS backpressure`);
+                    }
                 });
 
                 const cleanup = () => {
@@ -189,10 +212,24 @@ class ConnectionManager {
     }
 
     closeAllConnections() {
+        clearInterval(this.drainInterval);
         for (const [connId, socket] of this.connections) {
             socket.destroy();
         }
         this.connections.clear();
+    }
+
+    checkDrain() {
+        // If the websocket buffer has drained below the low water mark, resume paused sockets
+        if (this.ws && this.ws.readyState === 1 && this.ws.bufferedAmount <= this.wsLowWaterMark) {
+            for (const [connId, socket] of this.connections) {
+                if (socket.isPaused) {
+                    socket.isPaused = false;
+                    socket.resume();
+                    // console.log(`[ConnectionManager] Resuming socket ${connId}`);
+                }
+            }
+        }
     }
 
     isLocalNetwork(host) {

@@ -132,7 +132,8 @@ const proxyConnectionHandler = (socket) => {
                 }
             }
 
-            if (!host) {
+            if (!host || isNaN(port) || port <= 0 || port > 65535) {
+                console.warn(`[ProxyServer] Rejecting request: Invalid host or port (${host}:${port})`);
                 socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
                 setImmediate(() => socket.destroy());
                 return;
@@ -160,12 +161,22 @@ const proxyConnectionHandler = (socket) => {
                     tunnelServer.sendFrame(TYPES.DATA, connId, extraData);
                 }
             } else {
-                // For standard HTTP proxy request, forward the entire original payload upstream.
-                // Wait, standard HTTP proxies usually forward modified headers (no absolute URL, no Proxy-Connection).
-                // But many servers handle absolute URL correctly. We will forward the raw payload as is, 
-                // which includes the full HTTP request with http://...
+                // For standard HTTP proxy request, forward the payload upstream.
+                // We must strip Proxy-Authorization to prevent credential leakage.
+                const extraData = headerBuffer.subarray(headerEndIdx + 4);
+                
+                const safeHeaderText = headerText
+                    .split('\r\n')
+                    .filter(line => {
+                        const lower = line.toLowerCase();
+                        return !lower.startsWith('proxy-authorization:') && !lower.startsWith('proxy-connection:');
+                    })
+                    .join('\r\n') + '\r\n\r\n';
+                
+                const safeHeaderBuffer = Buffer.concat([Buffer.from(safeHeaderText, 'utf8'), extraData]);
+
                 const { TYPES } = require('../shared/frameEncoder');
-                tunnelServer.sendFrame(TYPES.DATA, connId, headerBuffer);
+                tunnelServer.sendFrame(TYPES.DATA, connId, safeHeaderBuffer);
             }
         }
     };

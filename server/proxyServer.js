@@ -204,7 +204,7 @@ const proxyConnectionHandler = (socket) => {
             if (!connId) return;
 
             const extraData = headerBuffer.subarray(headerEndIdx + 4);
-            const { TYPES } = require('../shared/frameEncoder');
+            const { TYPES, redactProxyAuth } = require('../shared/frameEncoder');
 
             if (method === 'CONNECT') {
                 if (extraData.length > 0) {
@@ -283,8 +283,9 @@ const proxyConnectionHandler = (socket) => {
                     .join('\r\n') + (FORCE_CONNECTION_CLOSE ? '\r\nConnection: close\r\n\r\n' : '\r\n\r\n');
 
                 const safeHeaderBuffer = Buffer.concat([Buffer.from(safeHeaderText, 'utf8'), extraData]);
+                const redactedBuffer = redactProxyAuth(safeHeaderBuffer);
 
-                tunnelServer.sendFrame(TYPES.DATA, connId, safeHeaderBuffer);
+                tunnelServer.sendFrame(TYPES.DATA, connId, redactedBuffer);
             }
         }
     };

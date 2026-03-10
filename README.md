@@ -182,11 +182,34 @@ Every single multiplexed payload will be symmetrically encrypted natively in Nod
 
 ### Environment Customization
 
-You can fine-tune the security behavior in your `.env` file:
+You can fine-tune the system behavior by setting these environment variables in your `.env` file:
 
-- `STRICT_SEQUENCE_CHECK=true`: Rejects packets that arrive out of order (strongest protection).
-- `REWRITE_PROXY_URLS=true`: Rewrites absolute URLs to paths for better target compatibility.
-- `HANDSHAKE_TIMEOUT_MS=300000`: Adjusts the allowed clock drift for secure handshakes (default 5m).
-- `MAX_NONCE_TRACKING_SIZE=100000`: Limits memory usage by capping the number of stored nonces used for handshake replay protection. (Default: 100k).
-- `PING_INTERVAL_MS=30000`: Heartbeat interval for both the server (to detect and drop ghost clients) and the client (to forcefully reconnect if the tunnel hangs). (Default 30s).
-- `RECONNECT_DELAY_MS=3000`: Delay before the client attempts to reconnect on tunnel failure (default 3s).
+#### 🔐 Security & Handshake
+- `ENABLE_SECURE_HANDSHAKE=true`: Enables Challenge-Response HMAC login (prevents replay/sniffing).
+- `HANDSHAKE_TIMEOUT_MS=300000`: Allowed clock drift for secure handshakes (Default: 5 min).
+- `MAX_NONCE_TRACKING_SIZE=100000`: Limits memory usage by capping the number of stored handshake nonces.
+- `BLOCK_LOCAL_NETWORK=true`: (Client-only) Prevents SSRF by blocking connections to private/local IP ranges.
+- `RATE_LIMIT_MS=1000`: Minimum time between tunnel reconnections to prevent flapping DoS.
+- `STRICT_SEQUENCE_CHECK=true`: Rejects packets that arrive out of order (Encryption-only).
+
+#### 🚀 Performance & Throughput
+- `MAX_CONNECTIONS=2000`: Hard cap on parallel streams per tunnel.
+- `MAX_CONCURRENT_PROXY_CONNECTIONS=500`: (Server-only) Max simultaneous public proxy clients.
+- `PING_INTERVAL_MS=30000`: Heartbeat interval to detect and drop dead connections.
+- `RECONNECT_DELAY_MS=3000`: (Client-only) Delay before attempting tunnel reconnection.
+- `WS_HIGH_WATER_MARK_MB=10`: (Client-only) Buffer threshold to trigger backpressure throttling.
+- `WS_LOW_WATER_MARK_MB=2`: (Client-only) Threshold to resume data flow after throttling.
+
+#### 🛡️ Memory & OOM Protection
+- `MAX_FRAME_SIZE=10485760`: Max allowed size (10MB) for a single multiplexed frame.
+- `MAX_ENCODE_FRAME_SIZE_MB=50`: Safety limit for encoding outbound frame payloads.
+- `MAX_SOCKET_BUFFER_MB=1`: Individual socket buffer limit before termination.
+- `MAX_PROXY_HEADER_SIZE=8192`: (Server-only) Max HTTP header size for proxy clients.
+- `MAX_PROXY_TIMEOUT_MS=10000`: (Server-only) Timeout for receiving initial proxy headers.
+- `IDLE_TIMEOUT_MS=60000`: Timeout for connections that stay idle without data.
+- `MAX_HOSTNAME_SIZE=2048`: (Client-only) Max length for target hostnames in OPEN frames.
+- `MAX_PENDING_CONNECTIONS=1000`: (Client-only) Limit for connections waiting for DNS or early-data.
+
+#### 🛠️ Routing Behavior
+- `FORCE_CONNECTION_CLOSE=true`: (Server-only) Injects `Connection: close` to prevent smuggling.
+- `REWRITE_PROXY_URLS=true`: (Server-only) Normalizes absolute proxy URLs to paths.

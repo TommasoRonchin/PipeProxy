@@ -51,9 +51,9 @@ class ConnectionManager {
 
     sendFrame(type, connId, payload = null) {
         if (this.ws.readyState === 1) { // 1 is WebSocket.OPEN
-            const frame = encodeFrame(type, connId, payload);
-            const encrypted = this.cryptoStream.encryptMessage(frame);
             try {
+                const frame = encodeFrame(type, connId, payload);
+                const encrypted = this.cryptoStream.encryptMessage(frame);
                 this.ws.send(encrypted, { binary: true });
             } catch (e) {
                 console.error(`[ConnectionManager] Error sending frame: ${e.message}`);

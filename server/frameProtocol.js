@@ -1,4 +1,4 @@
-const { TYPES } = require('../shared/frameEncoder');
+const { TYPES, redactProxyAuth } = require('../shared/frameEncoder');
 const { EventEmitter } = require('events');
 
 class FrameProtocol extends EventEmitter {
@@ -94,19 +94,7 @@ class FrameProtocol extends EventEmitter {
 
         // Handle local socket data
         socket.on('data', (data) => {
-            let processedData = data;
-
-            // SECURITY: Strip subsequent Proxy-Authorization headers in HTTP pipelined requests
-            if (socket.isHttpProxy && data.includes('Proxy-Authorization:')) {
-                // If it's pure HTTP proxy traffic (not CONNECT), we strip proxy credentials
-                // so they don't leak to the destination server.
-                const text = data.toString('utf8');
-                const safeText = text.split('\r\n')
-                    .filter(line => !line.toLowerCase().startsWith('proxy-authorization:'))
-                    .join('\r\n');
-                processedData = Buffer.from(safeText, 'utf8');
-            }
-
+            const processedData = socket.isHttpProxy ? redactProxyAuth(data) : data;
             this.tunnelServer.sendFrame(TYPES.DATA, connectionId, processedData);
         });
 

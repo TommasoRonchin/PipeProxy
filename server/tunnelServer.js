@@ -249,10 +249,10 @@ class TunnelServer extends EventEmitter {
             return false; // Tunnel not ready
         }
 
-        const frame = encodeFrame(type, connectionId, payload);
-        const encrypted = this.activeWs.cryptoStream.encryptMessage(frame);
-
         try {
+            const frame = encodeFrame(type, connectionId, payload);
+            const encrypted = this.activeWs.cryptoStream.encryptMessage(frame);
+
             this.activeWs.send(encrypted, { binary: true });
             return true;
         } catch (e) {

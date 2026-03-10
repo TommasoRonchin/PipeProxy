@@ -79,8 +79,18 @@ async function runPass(encryptionEnabled, encryptionSecret = 'test_enc_key') {
     let serverReady = false;
     let clientReady = false;
 
-    serverProcess.stdout.on('data', output => { if (output.toString().includes('listening on port 3128')) serverReady = true; });
-    clientProcess.stdout.on('data', output => { if (output.toString().includes('successfully')) clientReady = true; });
+    let serverOutput = '';
+    let clientOutput = '';
+    serverProcess.stdout.on('data', output => {
+        serverOutput += output.toString();
+        if (output.toString().includes('listening on port 3128')) serverReady = true;
+    });
+    serverProcess.stderr.on('data', output => { serverOutput += output.toString(); });
+    clientProcess.stdout.on('data', output => {
+        clientOutput += output.toString();
+        if (output.toString().includes('successfully')) clientReady = true;
+    });
+    clientProcess.stderr.on('data', output => { clientOutput += output.toString(); });
 
     let attempts = 20;
     while ((!serverReady || !clientReady) && attempts > 0) {
@@ -90,6 +100,8 @@ async function runPass(encryptionEnabled, encryptionSecret = 'test_enc_key') {
 
     if (!serverReady || !clientReady) {
         console.error('❌ Timeout waiting for server/client to start.');
+        console.error('SERVER OUTPUT:', serverOutput);
+        console.error('CLIENT OUTPUT:', clientOutput);
         serverProcess.kill();
         clientProcess.kill();
         return { passed: false, time: null };
@@ -103,11 +115,11 @@ async function runPass(encryptionEnabled, encryptionSecret = 'test_enc_key') {
     try {
         console.log(`⏳ Test 1: HTTP Verify (http://example.com) with Complex Password`);
         const httpRes = await runCurlCheck('http://example.com');
-        if (httpRes.includes('Example Domain')) passed++; else console.error('❌ Failed HTTP Check');
+        if (httpRes.includes('Example Domain')) passed++; else console.error('❌ Failed HTTP Check', httpRes);
 
         console.log(`⏳ Test 2: HTTPS Verify (https://example.com)`);
         const httpsRes = await runCurlCheck('https://example.com');
-        if (httpsRes.includes('Example Domain')) passed++; else console.error('❌ Failed HTTPS Check');
+        if (httpsRes.includes('Example Domain')) passed++; else console.error('❌ Failed HTTPS Check', httpsRes);
 
         console.log(`⏳ Test 3: Data Integrity API (https://api.ipify.org)`);
         const ipRes = await runCurlCheck('https://api.ipify.org');
@@ -118,7 +130,14 @@ async function runPass(encryptionEnabled, encryptionSecret = 'test_enc_key') {
         if (ssrfRes === "ERROR_TIMEOUT_OR_DROP") {
             passed++;
         } else {
-            console.error('❌ Failed SSRF Defense Check: Connection was not blocked!');
+            console.error('❌ Failed SSRF Defense Check: Connection was not blocked!', ssrfRes);
+        }
+
+        if (passed < 4) {
+            console.error('--- DEBUG: SERVER OUTPUT ---');
+            console.log(serverOutput);
+            console.error('--- DEBUG: CLIENT OUTPUT ---');
+            console.log(clientOutput);
         }
 
         console.log(`⏳ Test 5: Performance Benchmark (5 consecutive requests)`);

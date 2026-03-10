@@ -95,7 +95,7 @@ class ConnectionManager {
             // Real SSRF Protection via DNS Resolution
             this.pendingConnections.set(connectionId, { queue: [], size: 0 }); // Init queue
 
-            dns.lookup(host, { family: 4 }, (err, address, family) => {
+            dns.lookup(host, { family: 0, all: false }, (err, address, family) => {
                 // Check if connection was closed during DNS resolution
                 if (!this.pendingConnections.has(connectionId)) {
                     console.log(`[DEBUG] DNS resolved for ${host} but connection ${connectionId} was already aborted.`);

@@ -186,3 +186,4 @@ You can fine-tune the security behavior in your `.env` file:
 - `STRICT_SEQUENCE_CHECK=true`: Rejects packets that arrive out of order (strongest protection).
 - `REWRITE_PROXY_URLS=true`: Rewrites absolute URLs to paths for better target compatibility.
 - `HANDSHAKE_TIMEOUT_MS=300000`: Adjusts the allowed clock drift for secure handshakes (default 5m).
+- `MAX_NONCE_TRACKING_SIZE=100000`: Limits memory usage by capping the number of stored nonces used for handshake replay protection. (Default: 100k).

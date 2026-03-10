@@ -18,6 +18,7 @@ class TunnelServer extends EventEmitter {
         this.secureHandshake = process.env.ENABLE_SECURE_HANDSHAKE === 'true';
         this.handshakeTimeoutLimit = process.env.HANDSHAKE_TIMEOUT_MS ? parseInt(process.env.HANDSHAKE_TIMEOUT_MS, 10) : 5 * 60 * 1000;
         this.usedNonces = new Map();
+        this.maxNonceTrackingSize = process.env.MAX_NONCE_TRACKING_SIZE ? parseInt(process.env.MAX_NONCE_TRACKING_SIZE, 10) : 100000;
 
         // Per-connection crypto stream (initialized on connection)
         this.cryptoStream = null;
@@ -63,6 +64,12 @@ class TunnelServer extends EventEmitter {
                     if (this.usedNonces.has(nonce)) {
                         console.warn(`[TunnelServer] Rejected: Replay attack detected`);
                         ws.close(1008, 'Unauthorized');
+                        return;
+                    }
+
+                    if (this.usedNonces.size >= this.maxNonceTrackingSize) {
+                        console.warn(`[TunnelServer] Rejected: Nonce tracking limit reached (DoS protection)`);
+                        ws.close(1008, 'Server Busy');
                         return;
                     }
 

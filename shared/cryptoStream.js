@@ -9,8 +9,11 @@ class CryptoStream {
         this.isEncryptionEnabled = options.enableEncryption === true;
         this.isStrictSequenceEnabled = options.strictSequence !== false;
 
-        const secret = options.secret || 'default_secret';
-        this.key = crypto.createHash('sha256').update(secret).digest();
+        const secret = options.secret || process.env.ENCRYPTION_SECRET;
+        if (this.isEncryptionEnabled && (!secret || secret === 'default_secret')) {
+            throw new Error('CRITICAL: ENABLE_ENCRYPTION is true but no secure ENCRYPTION_SECRET was provided.');
+        }
+        this.key = crypto.createHash('sha256').update(secret || 'fallback_for_disabled_encryption').digest();
 
         // Replay attack prevention: sequence numbers per instance
         this.outSeq = 0;

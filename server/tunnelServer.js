@@ -27,139 +27,155 @@ class TunnelServer extends EventEmitter {
         setInterval(() => this.cleanupExpiredNonces(), 60 * 1000); // Check every minute
     }
 
-    start() {
-        try {
-            this.wss = new WebSocketServer({ port: this.port });
-            console.log(`[TunnelServer] Listening for Raspberry Pi on port ${this.port}`);
+    async start() {
+        return new Promise((resolve, reject) => {
+            try {
+                this.wss = new WebSocketServer({ port: this.port });
 
-            this.wss.on('error', (err) => {
-                console.error(`[TunnelServer] WSS Error: ${err.message}`);
-            });
-        } catch (err) {
-            console.error(`[TunnelServer] Failed to start server: ${err.message}`);
-            throw err; // Re-throw to be caught by proxyServer.js
-        }
+                const onStartupError = (err) => {
+                    this.wss.removeListener('listening', onListening);
+                    reject(err);
+                };
 
-        this.wss.on('connection', (ws, req) => {
-            // Authentication
-            if (this.secret) {
-                if (this.secureHandshake) {
-                    const timestamp = req.headers['x-tunnel-timestamp'];
-                    const nonce = req.headers['x-tunnel-nonce'];
-                    const signature = req.headers['x-tunnel-signature'];
+                const onListening = () => {
+                    this.wss.removeListener('error', onStartupError);
+                    console.log(`[TunnelServer] Listening for Raspberry Pi on port ${this.port}`);
+                    resolve();
+                };
 
-                    if (!timestamp || !nonce || !signature) {
-                        console.warn(`[TunnelServer] Rejected: Missing secure handshake headers`);
-                        ws.close(1008, 'Unauthorized');
-                        return;
-                    }
+                this.wss.once('error', onStartupError);
+                this.wss.once('listening', onListening);
 
-                    // Allow configurable clock drift between Client and Server (Default 5 min)
-                    if (Math.abs(Date.now() - parseInt(timestamp, 10)) > this.handshakeTimeoutLimit) {
-                        console.warn(`[TunnelServer] Rejected: Timestamp drift too large`);
-                        ws.close(1008, 'Unauthorized');
-                        return;
-                    }
+                // For future errors after successful startup
+                this.wss.on('error', (err) => {
+                    console.error(`[TunnelServer] WSS Runtime Error: ${err.message}`);
+                });
 
-                    if (this.usedNonces.has(nonce)) {
-                        console.warn(`[TunnelServer] Rejected: Replay attack detected`);
-                        ws.close(1008, 'Unauthorized');
-                        return;
-                    }
-
-                    if (this.usedNonces.size >= this.maxNonceTrackingSize) {
-                        console.warn(`[TunnelServer] Rejected: Nonce tracking limit reached (DoS protection)`);
-                        ws.close(1008, 'Server Busy');
-                        return;
-                    }
-
-                    const expectedSignature = crypto.createHmac('sha256', this.secret).update(timestamp + nonce).digest('hex');
-                    if (!timingSafeEqual(signature, expectedSignature)) {
-                        console.warn(`[TunnelServer] Rejected: Invalid signature`);
-                        ws.close(1008, 'Unauthorized');
-                        return;
-                    }
-
-                    this.usedNonces.set(nonce, parseInt(timestamp, 10));
-                } else {
-                    const authHeader = req.headers['x-tunnel-secret'];
-                    if (!timingSafeEqual(authHeader, this.secret)) {
-                        console.warn(`[TunnelServer] Rejected connection from ${req.socket.remoteAddress}: Invalid secret`);
-                        ws.close(1008, 'Unauthorized');
-                        return;
-                    }
-                }
+            } catch (err) {
+                reject(err);
             }
 
-            console.log(`[TunnelServer] Raspberry Pi connected from ${req.socket.remoteAddress}`);
+            this.wss.on('connection', (ws, req) => {
+                // Authentication
+                if (this.secret) {
+                    if (this.secureHandshake) {
+                        const timestamp = req.headers['x-tunnel-timestamp'];
+                        const nonce = req.headers['x-tunnel-nonce'];
+                        const signature = req.headers['x-tunnel-signature'];
 
-            // If there's an existing connection, drop it
-            if (this.activeWs) {
-                console.log(`[TunnelServer] Dropping previous tunnel connection`);
-                this.activeWs.close(1000, 'New connection established');
-            }
+                        if (!timestamp || !nonce || !signature) {
+                            console.warn(`[TunnelServer] Rejected: Missing secure handshake headers`);
+                            ws.close(1008, 'Unauthorized');
+                            return;
+                        }
 
-            // Initialize/Reset Crypto Stream for the new connection
-            this.cryptoStream = new CryptoStream({
-                enableEncryption: process.env.ENABLE_ENCRYPTION === 'true',
-                secret: process.env.ENCRYPTION_SECRET,
-                strictSequence: process.env.STRICT_SEQUENCE_CHECK !== 'false'
-            });
+                        // Allow configurable clock drift between Client and Server (Default 5 min)
+                        if (Math.abs(Date.now() - parseInt(timestamp, 10)) > this.handshakeTimeoutLimit) {
+                            console.warn(`[TunnelServer] Rejected: Timestamp drift too large`);
+                            ws.close(1008, 'Unauthorized');
+                            return;
+                        }
 
-            this.activeWs = ws;
-            const decoder = new FrameDecoder();
+                        if (this.usedNonces.has(nonce)) {
+                            console.warn(`[TunnelServer] Rejected: Replay attack detected`);
+                            ws.close(1008, 'Unauthorized');
+                            return;
+                        }
 
-            decoder.on('error', (err) => {
-                console.error(`[TunnelServer] Decoder error: ${err.message}`);
-                ws.close(1008, 'Frame decoder error');
-            });
+                        if (this.usedNonces.size >= this.maxNonceTrackingSize) {
+                            console.warn(`[TunnelServer] Rejected: Nonce tracking limit reached (DoS protection)`);
+                            ws.close(1008, 'Server Busy');
+                            return;
+                        }
 
-            ws.on('message', (data) => {
-                try {
-                    const decrypted = this.cryptoStream.decryptMessage(data);
-                    decoder.push(decrypted);
-                } catch (e) {
-                    console.error(`[TunnelServer] Decryption failed, dropping connection: ${e.message}`);
-                    ws.terminate();
+                        const expectedSignature = crypto.createHmac('sha256', this.secret).update(timestamp + nonce).digest('hex');
+                        if (!timingSafeEqual(signature, expectedSignature)) {
+                            console.warn(`[TunnelServer] Rejected: Invalid signature`);
+                            ws.close(1008, 'Unauthorized');
+                            return;
+                        }
+
+                        this.usedNonces.set(nonce, parseInt(timestamp, 10));
+                    } else {
+                        const authHeader = req.headers['x-tunnel-secret'];
+                        if (!timingSafeEqual(authHeader, this.secret)) {
+                            console.warn(`[TunnelServer] Rejected connection from ${req.socket.remoteAddress}: Invalid secret`);
+                            ws.close(1008, 'Unauthorized');
+                            return;
+                        }
+                    }
                 }
-            });
 
-            decoder.on('frame', (frame) => {
-                this.emit('frame', frame);
-            });
+                console.log(`[TunnelServer] Raspberry Pi connected from ${req.socket.remoteAddress}`);
 
-            ws.on('close', () => {
-                if (this.activeWs === ws) {
-                    console.log(`[TunnelServer] Raspberry Pi connection closed`);
-                    this.activeWs = null;
-                    clearInterval(this.pingInterval);
-                    this.emit('tunnel_close');
+                // If there's an existing connection, drop it
+                if (this.activeWs) {
+                    console.log(`[TunnelServer] Dropping previous tunnel connection`);
+                    this.activeWs.close(1000, 'New connection established');
                 }
-            });
 
-            ws.on('error', (err) => {
-                console.error(`[TunnelServer] WS Error: ${err.message}`);
-            });
+                // Initialize/Reset Crypto Stream for the new connection
+                this.cryptoStream = new CryptoStream({
+                    enableEncryption: process.env.ENABLE_ENCRYPTION === 'true',
+                    secret: process.env.ENCRYPTION_SECRET,
+                    strictSequence: process.env.STRICT_SEQUENCE_CHECK !== 'false'
+                });
 
-            // Heartbeat Logic
-            this.isAlive = true;
-            ws.on('pong', () => {
+                this.activeWs = ws;
+                const decoder = new FrameDecoder();
+
+                decoder.on('error', (err) => {
+                    console.error(`[TunnelServer] Decoder error: ${err.message}`);
+                    ws.close(1008, 'Frame decoder error');
+                });
+
+                ws.on('message', (data) => {
+                    try {
+                        const decrypted = this.cryptoStream.decryptMessage(data);
+                        decoder.push(decrypted);
+                    } catch (e) {
+                        console.error(`[TunnelServer] Decryption failed, dropping connection: ${e.message}`);
+                        ws.terminate();
+                    }
+                });
+
+                decoder.on('frame', (frame) => {
+                    this.emit('frame', frame);
+                });
+
+                ws.on('close', () => {
+                    if (this.activeWs === ws) {
+                        console.log(`[TunnelServer] Raspberry Pi connection closed`);
+                        this.activeWs = null;
+                        clearInterval(this.pingInterval);
+                        this.emit('tunnel_close');
+                    }
+                });
+
+                ws.on('error', (err) => {
+                    console.error(`[TunnelServer] WS Error: ${err.message}`);
+                });
+
+                // Heartbeat Logic
                 this.isAlive = true;
+                ws.on('pong', () => {
+                    this.isAlive = true;
+                });
+
+                if (this.pingInterval) clearInterval(this.pingInterval);
+                this.pingInterval = setInterval(() => {
+                    if (!this.activeWs) return;
+                    if (this.isAlive === false) {
+                        console.warn(`[TunnelServer] Ping timeout, terminating connection`);
+                        this.activeWs.terminate();
+                        return;
+                    }
+                    this.isAlive = false;
+                    this.activeWs.ping(); // standard ws ping frame
+                }, 30000); // 30 seconds
+
+                this.emit('tunnel_ready');
             });
-
-            if (this.pingInterval) clearInterval(this.pingInterval);
-            this.pingInterval = setInterval(() => {
-                if (!this.activeWs) return;
-                if (this.isAlive === false) {
-                    console.warn(`[TunnelServer] Ping timeout, terminating connection`);
-                    this.activeWs.terminate();
-                    return;
-                }
-                this.isAlive = false;
-                this.activeWs.ping(); // standard ws ping frame
-            }, 30000); // 30 seconds
-
-            this.emit('tunnel_ready');
         });
     }
 

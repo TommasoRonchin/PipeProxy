@@ -190,10 +190,21 @@ const proxyConnectionHandler = (socket) => {
                     }
                 }
 
+                const hopByHopHeaders = [
+                    'proxy-authorization:',
+                    'proxy-connection:',
+                    'connection:',
+                    'keep-alive:',
+                    'upgrade:',
+                    'te:',
+                    'trailer:',
+                    'transfer-encoding:'
+                ];
+
                 const safeHeaderText = linesToFilter
                     .filter(line => {
                         const lower = line.toLowerCase();
-                        return !lower.startsWith('proxy-authorization:') && !lower.startsWith('proxy-connection:');
+                        return !hopByHopHeaders.some(h => lower.startsWith(h));
                     })
                     .join('\r\n') + '\r\n\r\n';
 
@@ -236,24 +247,19 @@ if (ENABLE_TLS_PROXY) {
 }
 
 // 3. Start components
-try {
-    tunnelServer.start();
-} catch (err) {
-    console.error(`[ProxyServer] CRITICAL: Failed to start Tunnel Server: ${err.message}`);
-    process.exit(1);
-}
+(async () => {
+    try {
+        await tunnelServer.start();
 
-// Global server error handling (Point 5)
-proxyServer.on('error', (err) => {
-    if (err.code === 'EADDRINUSE') {
-        console.error(`[ProxyServer] CRITICAL: Port ${PROXY_PORT} is already in use.`);
-    } else {
-        console.error(`[ProxyServer] Global Error: ${err.message}`);
+        proxyServer.listen(PROXY_PORT, () => {
+            console.log(`[ProxyServer] Proxy is listening on port ${PROXY_PORT}`);
+        });
+    } catch (err) {
+        if (err.code === 'EADDRINUSE') {
+            console.error(`[ProxyServer] CRITICAL: Tunnel port ${TUNNEL_PORT} is already in use.`);
+        } else {
+            console.error(`[ProxyServer] CRITICAL: Failed to start Tunnel Server: ${err.message}`);
+        }
+        process.exit(1);
     }
-    // Don't crash the whole app if it's transient, but for EADDRINUSE we probably want to exit gracefully
-    if (err.code === 'EADDRINUSE') process.exit(1);
-});
-
-proxyServer.listen(PROXY_PORT, () => {
-    console.log(`[ProxyServer] Proxy is listening on port ${PROXY_PORT}`);
-});
+})();

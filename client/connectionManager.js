@@ -143,9 +143,9 @@ class ConnectionManager {
                     this.sendFrame(TYPES.DATA, connectionId, data);
 
                     // Check if WebSocket buffer is getting too full
-                    if (this.ws.bufferedAmount > this.wsHighWaterMark && !socket.isPaused) {
+                    if (this.ws.bufferedAmount > this.wsHighWaterMark && !socket._isPausedByBackpressure) {
                         socket.pause();
-                        socket.isPaused = true;
+                        socket._isPausedByBackpressure = true;
                         // console.warn(`[ConnectionManager] Pausing socket ${connectionId} due to WS backpressure`);
                     }
                 });
@@ -234,8 +234,8 @@ class ConnectionManager {
         // If the websocket buffer has drained below the low water mark, resume paused sockets
         if (this.ws && this.ws.readyState === 1 && this.ws.bufferedAmount <= this.wsLowWaterMark) {
             for (const [connId, socket] of this.connections) {
-                if (socket.isPaused) {
-                    socket.isPaused = false;
+                if (socket._isPausedByBackpressure) {
+                    socket._isPausedByBackpressure = false;
                     socket.resume();
                     // console.log(`[ConnectionManager] Resuming socket ${connId}`);
                 }

@@ -28,28 +28,28 @@ const RECONNECT_DELAY_MS = process.env.RECONNECT_DELAY_MS ? parseInt(process.env
 function connect() {
     console.log(`[RaspberryClient] Connecting to VPS tunnel at ${SERVER_URL}...`);
 
-    const options = {};
+    const options = { headers: {} };
+    const sessionNonce = crypto.randomBytes(16).toString('hex');
+    options.headers['x-tunnel-session-nonce'] = sessionNonce;
+
     if (TUNNEL_SECRET) {
         if (ENABLE_SECURE_HANDSHAKE) {
             const timestamp = Date.now().toString();
             const nonce = crypto.randomBytes(16).toString('hex');
             const signature = crypto.createHmac('sha256', TUNNEL_SECRET).update(timestamp + nonce).digest('hex');
 
-            options.headers = {
-                'x-tunnel-timestamp': timestamp,
-                'x-tunnel-nonce': nonce,
-                'x-tunnel-signature': signature
-            };
+            options.headers['x-tunnel-timestamp'] = timestamp;
+            options.headers['x-tunnel-nonce'] = nonce;
+            options.headers['x-tunnel-signature'] = signature;
         } else {
-            options.headers = {
-                'x-tunnel-secret': TUNNEL_SECRET
-            };
+            options.headers['x-tunnel-secret'] = TUNNEL_SECRET;
         }
     }
 
     const cryptoStream = new CryptoStream({
         enableEncryption: process.env.ENABLE_ENCRYPTION === 'true',
         secret: process.env.ENCRYPTION_SECRET,
+        sessionNonce: sessionNonce,
         strictSequence: process.env.STRICT_SEQUENCE_CHECK !== 'false'
     });
 

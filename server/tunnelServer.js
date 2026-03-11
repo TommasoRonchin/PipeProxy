@@ -140,9 +140,11 @@ class TunnelServer extends EventEmitter {
                 }
 
                 // Inizializza il Crypto Stream per questa specifica connessione socket
+                const sessionNonce = req.headers['x-tunnel-session-nonce'] || '';
                 ws.cryptoStream = new CryptoStream({
                     enableEncryption: process.env.ENABLE_ENCRYPTION === 'true',
                     secret: process.env.ENCRYPTION_SECRET,
+                    sessionNonce: sessionNonce,
                     strictSequence: process.env.STRICT_SEQUENCE_CHECK !== 'false'
                 });
 

@@ -13,7 +13,8 @@ class CryptoStream {
         if (this.isEncryptionEnabled && (!secret || secret === 'default_secret')) {
             throw new Error('CRITICAL: ENABLE_ENCRYPTION is true but no secure ENCRYPTION_SECRET was provided.');
         }
-        this.key = crypto.createHash('sha256').update(secret || 'fallback_for_disabled_encryption').digest();
+        const sessionNonce = options.sessionNonce || '';
+        this.key = crypto.createHash('sha256').update((secret || 'fallback_for_disabled_encryption') + sessionNonce).digest();
 
         // Replay attack prevention: sequence numbers per instance
         this.outSeq = 0;

@@ -129,6 +129,8 @@ class ConnectionManager {
 
                 if (err || !addresses || addresses.length === 0) {
                     console.warn(`[ConnectionManager] Failed to resolve target host ${host}: ${err ? err.message : 'No addresses'}`);
+                    const response = `HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nDNS Resolution Error: Could not resolve host [${host}].\n`;
+                    this.sendFrame(TYPES.DATA, connectionId, Buffer.from(response));
                     this.sendFrame(TYPES.CLOSE, connectionId);
                     this.pendingConnections.delete(connectionId);
                     return;

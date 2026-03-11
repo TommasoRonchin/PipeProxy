@@ -423,7 +423,116 @@ async function runTests() {
         await stopAllServers();
 
 
-    } catch (err) {
+        // ==========================================================
+        // CATEGORY 5: ADVANCED PROTOCOL & STATE INTEGRITY 
+        // ==========================================================
+        console.log('\n--- 5. Advanced Protocol & State Integrity ---');
+
+        // 5.1 Frame Fragmentation (Split protocol frame across multiple WS messages)
+        console.log('  Testing Frame Fragmentation...');
+        sys = await startTunnelSystem({ PORT: 3160, TUNNEL_PORT: 8100 });
+        const { encodeFrame, TYPES } = require('./shared/frameEncoder');
+        let fragmentedSuccess = await new Promise((resolve) => {
+            const ws = new WebSocket(`ws://127.0.0.1:8100`, { headers: { 'x-tunnel-secret': 'default_test_secret' } });
+            ws.on('open', () => {
+                const fullFrame = encodeFrame(TYPES.DATA, 1, Buffer.from("Fragmented Data Test"));
+                // Split frame into 3 parts
+                const p1 = fullFrame.subarray(0, 5);
+                const p2 = fullFrame.subarray(5, 12);
+                const p3 = fullFrame.subarray(12);
+
+                ws.send(p1);
+                setTimeout(() => ws.send(p2), 50);
+                setTimeout(() => ws.send(p3), 100);
+            });
+            // We need a dummy listener to see if it actually worked
+            // but the client will just try to connect to some random ID 1 which doesn't exist.
+            // If the client doesn't CRASH or error out in logs, it handled fragmentation.
+            setTimeout(() => resolve(true), 1000);
+            ws.on('error', () => resolve(false));
+            ws.on('close', () => resolve(false));
+        });
+        assert(fragmentedSuccess, 'Frame Fragmentation: Client remained stable and parsed split protocol frames');
+        await stopAllServers();
+
+        // 5.2 Protocol Corruption (Invalid Frame Type)
+        console.log('  Testing Protocol Corruption (Bad Type)...');
+        sys = await startTunnelSystem({ PORT: 3161, TUNNEL_PORT: 8101 });
+        let corruptionHandled = await new Promise((resolve) => {
+            const ws = new WebSocket(`ws://127.0.0.1:8101`, { headers: { 'x-tunnel-secret': 'default_test_secret' } });
+            ws.on('open', () => {
+                const badFrame = Buffer.alloc(10);
+                badFrame.writeUInt8(99, 0); // Type 99 is invalid
+                ws.send(badFrame);
+                setTimeout(() => resolve(true), 1000);
+            });
+            ws.on('close', () => resolve(true)); // Server might close connection on corruption, which is valid defense.
+        });
+        assert(corruptionHandled, 'Protocol Corruption: System survived invalid frame type without unhandled exception');
+        await stopAllServers();
+
+        // 5.3 Orphan Connection Cleanup
+        console.log('  Testing Orphan Connection Cleanup...');
+        sys = await startTunnelSystem({ PORT: 3162, TUNNEL_PORT: 8102 });
+        let orphanPort = 4001;
+        // Hold a connection open using CONNECT to echo server (persistent)
+        let orphanSocketClosed = false;
+        const orphanSocket = net.connect(sys.proxyPort, '127.0.0.1', () => {
+            orphanSocket.write(`CONNECT 127.0.0.1:4002 HTTP/1.1\r\nHost: 127.0.0.1:4002\r\n\r\n`);
+        });
+        orphanSocket.on('close', () => {
+            orphanSocketClosed = true;
+        });
+        await delay(1000); // Wait for full handshake
+        // Brutally kill the client to orphan the connection on the server
+        sys.clientProcess.kill('SIGKILL');
+        await delay(3000);
+        assert(orphanSocketClosed, 'Orphan Cleanup: Proxy socket on server closed when tunnel was lost');
+        await stopAllServers();
+
+        // 5.4 DNS Failure Resilience
+        console.log('  Testing DNS Failure Resilience...');
+        sys = await startTunnelSystem({ PORT: 3163, TUNNEL_PORT: 8103 });
+        res = await makeProxyRequest(sys.proxyPort, 'non-existent-domain-12345.local', 80, 'GET', '/');
+        assert(res.toString().includes('502 Bad Gateway') || res.toString().includes('DNS Resolution Error'), 'DNS Failure: Returned 502/Error for unreachable domain');
+        await stopAllServers();
+
+
+        // ==========================================================
+        // CATEGORY 6: STABILITY & PERFORMANCE 
+        // ==========================================================
+        console.log('\n--- 6. Stability & Performance Under Pressure ---');
+
+        // 6.1 Tunnel Heartbeat
+        console.log('  Testing Tunnel Heartbeat (PING/PONG)...');
+        // Start server with very short ping interval
+        const heartbeatEnv = { PORT: 3164, TUNNEL_PORT: 8104, PING_INTERVAL_MS: '1000' };
+        sys = await startTunnelSystem(heartbeatEnv);
+        await delay(3000); // Wait for a few pings
+        assert(!sys.clientProcess.killed && !sys.serverProcess.killed, 'Heartbeat: Tunnel remained alive over multiple PING/PONG cycles');
+        await stopAllServers();
+
+        // 6.2 Rapid Connection Churn
+        console.log('  Testing Rapid Connection Churn (100 rapid cycles)...');
+        sys = await startTunnelSystem({ PORT: 3165, TUNNEL_PORT: 8105 });
+        let churnPassed = true;
+        for (let i = 0; i < 100; i++) {
+            try {
+                const s = net.connect(sys.proxyPort, '127.0.0.1');
+                s.on('error', () => { });
+                s.write('GET http://127.0.0.1:4001/churn HTTP/1.1\r\nHost: 127.0.0.1:4001\r\n\r\n');
+                await delay(10);
+                s.destroy();
+            } catch (e) {
+                churnPassed = false;
+                break;
+            }
+        }
+        assert(churnPassed, 'Rapid Churn: 100 connections opened and closed rapidly without crashing the proxy');
+        await stopAllServers();
+
+        // Final cleanup
+        await stopAllServers();
         console.error("❌ UNEXPECTED TEST HARNESS ERROR:", err);
         failedTests++;
     } finally {

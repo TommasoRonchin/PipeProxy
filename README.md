@@ -1,9 +1,33 @@
 # PipeProxy 🚀
 
-A high-performance, production-grade distributed HTTP/HTTPS Proxy system built in raw Node.js. 
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Node.js Version](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen.svg)](https://nodejs.org/)
+[![Project Status: Production-Ready](https://img.shields.io/badge/Status-Production--Ready-success.svg)](#)
+[![Security: AES-256-GCM](https://img.shields.io/badge/Security-AES--256--GCM-blueviolet.svg)](#)
 
-PipeProxy allows you to route proxy traffic through an external client (such as a Raspberry Pi at home, another server, or a PC) that sits behind a NAT, by keeping a persistent multiplexed WebSocket tunnel connected to a public VPS.
+```text
+  _____  _                _____                                
+ |  __ \(_)              |  __ \                               
+ | |__) |_ _ __   ___    | |__) | __ _____  ___   _            
+ |  ___/| | '_ \ / _ \   |  ___/ '__/ _ \ \/ / | | |           
+ | |    | | |_) |  __/   | |   | | | (_) >  <| |_| |           
+ |_|    |_| .__/ \___|   |_|   |_|  \___/_/\_\\__, |           
+          | |                                  __/ |           
+          |_|                                 |___/            
+```
 
+**PipeProxy** is a high-performance, production-grade distributed HTTP/HTTPS Proxy system built in raw Node.js. 
+
+### 💡 Why PipeProxy?
+
+Most proxy solutions require complex VPN setups or exposed ports on your home network. **PipeProxy** flips the script:
+- **No Port Forwarding**: Your home/IoT device connects *outbound* to the VPS.
+- **Multiplexed**: Thousands of concurrent connections over a single WebSocket.
+- **Zero-Trust**: Native AES-256-GCM encryption ensures your VPS provider can't sniff your traffic.
+- **Lightweight**: Zero heavy dependencies. Runs perfectly on a Raspberry Pi Zero.
+- **Resilient**: Implements "Happy Eyeballs" for seamless IPv6/v4 fallback.
+
+---
 ## 🏗️ Architecture
 
 - **Server A (Public VPS)**: Exposes a standard HTTP/HTTPS proxy port (e.g., `3128`).

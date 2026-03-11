@@ -1,14 +1,47 @@
 {
   "name": "pipeproxy",
   "version": "1.0.0",
-  "main": "index.js",
+  "description": "A high-performance, production-grade distributed HTTP/HTTPS Proxy system with AES-256-GCM encrypted multiplexed tunnels.",
+  "main": "server/proxyServer.js",
   "scripts": {
-    "test": "node tests/test_comprehensive.js"
+    "test": "node tests/test_comprehensive.js",
+    "server": "node server/proxyServer.js",
+    "client": "node client/raspberryClient.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TommasoRonchin/PipeProxy.git"
+  },
+  "keywords": [
+    "proxy",
+    "http-proxy",
+    "tunnel",
+    "multiplexing",
+    "raspberry-pi",
+    "security",
+    "aes-256-gcm",
+    "nodejs",
+    "nat-traversal",
+    "firewall-bypass",
+    "reverse-tunnel",
+    "iot-networking",
+    "websocket-tunnel",
+    "remote-access",
+    "network-tool",
+    "ssrf-protection",
+    "privacy",
+    "encryption",
+    "tcp-tunnel",
+    "distributed-system",
+    "high-performance",
+    "backpressure",
+    "open-source"
+  ],
+  "author": "Tommaso Ronchin",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "dependencies": {
     "dotenv": "^17.3.1",
     "ipaddr.js": "^2.3.0",

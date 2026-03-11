@@ -97,6 +97,18 @@ curl -U admin:securepassword123 -x http://YOUR_VPS_IP:3128 https://api.ipify.org
 
 ---
 
+## 🧪 Developing & Testing
+
+PipeProxy comes with a gigantic comprehensive test suite that validates 31+ ultra-extreme scenarios including security exploits, load testing, and protocol integrity.
+
+**Run All Tests:**
+```bash
+npm test
+```
+*Note: The tests will automatically spawn dummy backends and temporary server/client instances on high ports.*
+
+---
+
 ## 🛠️ Advanced Features
 
 - **Backpressure Handling:** The client and server track TCP buffer saturation. If a single destination socket fills beyond the `MAX_SOCKET_BUFFER_MB` (default 1MB) high-watermark, the specific stream is gracefully terminated without affecting the rest of the tunnel to prevent Out-Of-Memory crashes.
@@ -191,6 +203,7 @@ You can fine-tune the system behavior by setting these environment variables in 
 - `BLOCK_LOCAL_NETWORK=true`: (Client-only) Prevents SSRF by blocking connections to private/local IP ranges.
 - `RATE_LIMIT_MS=1000`: Minimum time between tunnel reconnections to prevent flapping DoS.
 - `STRICT_SEQUENCE_CHECK=true`: Rejects packets that arrive out of order (Encryption-only).
+- `DEBUG_START_ID=1`: (Optional) Forces the connection counter to start at a high value to test 32-bit wrapping.
 
 #### 🚀 Performance & Throughput
 - `MAX_CONNECTIONS=2000`: Hard cap on parallel streams per tunnel.

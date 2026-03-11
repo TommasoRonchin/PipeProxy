@@ -4,6 +4,7 @@
 [![Node.js Version](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen.svg)](https://nodejs.org/)
 [![Project Status: Production-Ready](https://img.shields.io/badge/Status-Production--Ready-success.svg)](#)
 [![Security: AES-256-GCM](https://img.shields.io/badge/Security-AES--256--GCM-blueviolet.svg)](#)
+[![Build Status](https://github.com/TommasoRonchin/PipeProxy/actions/workflows/ci.yml/badge.svg)](https://github.com/TommasoRonchin/PipeProxy/actions)
 
 ```text
   _____  _                _____                                

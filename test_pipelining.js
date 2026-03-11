@@ -8,6 +8,8 @@ process.env.ENABLE_PROXY_AUTH = 'true';
 process.env.PORT = '8128';
 process.env.TUNNEL_PORT = '8180';
 process.env.SERVER_URL = 'ws://localhost:8180';
+process.env.BLOCK_LOCAL_NETWORK = 'false';
+process.env.FORCE_CONNECTION_CLOSE = 'false';
 
 // Start Server and Client dynamically
 const serverProc = spawn('node', ['server/proxyServer.js'], { env: process.env, stdio: 'ignore' });

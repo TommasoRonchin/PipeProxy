@@ -158,10 +158,15 @@ By default, the tunnel secret would be transmitted in plaintext if you use a sim
 If you enable proxy authentication (`ENABLE_PROXY_AUTH`), the generic basic-auth credentials `PROXY_AUTH_USERNAME/PASSWORD` would normally transmit in plaintext HTTP. To encrypt the proxy node connection fully, you can enable native TLS directly in Node.js by setting `ENABLE_TLS_PROXY=true` on the VPS along with paths to your `.pem` files.
 This converts your proxy server into a Secure HTTPS Proxy, ensuring nobody can intercept your proxy credentials. This is configured via `ENABLE_TLS_PROXY=true`, `TLS_CERT_PATH`, and `TLS_KEY_PATH`.
 
-### 3. WSS / HTTPS (Recommended for Production Tunnel)
+### 3. WSS / HTTPS (Stealth Layer for Production)
 
-Even with a secure handshake, if `ENABLE_ENCRYPTION` is false, your proxy traffic (the websites you visit) will travel in plaintext over `ws://` to the VPS. 
-To make the tunnel **100% secure and uninterceptable**, you should either enable Native AES Encryption or use **WSS (WebSocket Secure)**. 
+Even with native AES encryption enabled, using **WSS (WebSocket Secure)** is highly recommended for production environments. 
+
+While our AES layer protects the **content** of your traffic, wrapping the tunnel in TLS (WSS) provides **Protocol Masking**:
+- **Bypass Deep Packet Inspection (DPI)**: Standard TLS over port 443 makes your tunnel look like normal HTTPS browsing, preventing ISPs or corporate firewalls from throttling or blocking custom binary protocols.
+- **Defense in Depth**: Provides an industry-standard encryption layer *around* our internal AES layer.
+- **Identity Verification**: Ensures the client is definitely connecting to *your* VPS and not a middle-man.
+
 We strongly recommend placing the VPS Tunnel Server behind a Reverse Proxy like **Nginx** or **Caddy** with a free SSL certificate from Let's Encrypt.
 
 ### How to Secure with Nginx:

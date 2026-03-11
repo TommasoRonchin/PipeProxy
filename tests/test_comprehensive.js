@@ -26,8 +26,8 @@ async function startTunnelSystem(envOverrides = {}) {
         ...envOverrides
     };
 
-    const serverPath = path.join(__dirname, 'server', 'proxyServer.js');
-    const clientPath = path.join(__dirname, 'client', 'raspberryClient.js');
+    const serverPath = path.join(__dirname, '..', 'server', 'proxyServer.js');
+    const clientPath = path.join(__dirname, '..', 'client', 'raspberryClient.js');
 
     const serverProcess = spawn('node', [serverPath], { env: { ...process.env, ...defaultEnv } });
 
@@ -239,7 +239,7 @@ async function runTests() {
         await stopAllServers();
 
         // 2.4 Tunnel Secret Invalid
-        let serverOnly = spawn('node', [path.join(__dirname, 'server', 'proxyServer.js')], {
+        let serverOnly = spawn('node', [path.join(__dirname, '..', 'server', 'proxyServer.js')], {
             env: { ...process.env, SKIP_DOTENV: 'true', PORT: 3153, TUNNEL_PORT: 8093, TUNNEL_SECRET: 'supersecret', ENABLE_TLS_PROXY: 'false' }
         });
         activeServers.push(serverOnly);
@@ -604,10 +604,10 @@ async function runTests() {
         console.log('  Testing Concurrent Tunnel Collision...');
         // Start two clients simultaneously for the same server
         const collEnv = { PORT: 3172, TUNNEL_PORT: 8112, TUNNEL_SECRET: 'collision-secret' };
-        const collSrv = spawn('node', ['server/proxyServer.js'], { env: { ...process.env, ...collEnv } });
+        const collSrv = spawn('node', [path.join(__dirname, '..', 'server', 'proxyServer.js')], { env: { ...process.env, ...collEnv } });
         await delay(1000);
-        const collCl1 = spawn('node', ['client/raspberryClient.js'], { env: { ...process.env, ...collEnv, SERVER_URL: 'ws://127.0.0.1:8112' } });
-        const collCl2 = spawn('node', ['client/raspberryClient.js'], { env: { ...process.env, ...collEnv, SERVER_URL: 'ws://127.0.0.1:8112' } });
+        const collCl1 = spawn('node', [path.join(__dirname, '..', 'client', 'raspberryClient.js')], { env: { ...process.env, ...collEnv, SERVER_URL: 'ws://127.0.0.1:8112' } });
+        const collCl2 = spawn('node', [path.join(__dirname, '..', 'client', 'raspberryClient.js')], { env: { ...process.env, ...collEnv, SERVER_URL: 'ws://127.0.0.1:8112' } });
         await delay(3000);
         assert(!collSrv.killed, 'Tunnel Collision: Server survived simultaneous connection attempts');
         collCl1.kill(); collCl2.kill(); collSrv.kill();

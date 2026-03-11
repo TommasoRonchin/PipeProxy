@@ -53,7 +53,8 @@ npm install
 
 ---
 
-## 🚀 Deployment
+---
+## 🚀 Manual Installation & Deployment
 
 ### 1. Server Configuration (VPS)
 

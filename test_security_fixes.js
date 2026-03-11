@@ -7,10 +7,16 @@ async function delay(ms) {
     return new Promise(r => setTimeout(r, ms));
 }
 
-// Dummy server to echo received headers
+// Dummy server to echo received headers and body
 const dummyServer = http.createServer((req, res) => {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(req.headers));
+    let body = '';
+    req.on('data', chunk => {
+        body += chunk.toString();
+    });
+    req.on('end', () => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ headers: req.headers, body }));
+    });
 });
 
 dummyServer.listen(3000, '127.0.0.1');
@@ -44,9 +50,10 @@ async function testHeaderStripping() {
 
         setTimeout(() => {
             if (dataReceived.includes('200 OK')) {
-                const bodyMatches = dataReceived.match(/\{.*\}/);
+                const bodyMatches = dataReceived.match(/\{.*\}/s);
                 if (bodyMatches) {
-                    const headers = JSON.parse(bodyMatches[0]);
+                    const parsed = JSON.parse(bodyMatches[0]);
+                    const headers = parsed.headers || parsed;
                     if (headers['proxy-authorization'] || headers['proxy-connection']) {
                         console.error('❌ Header stripping FAILED. Headers leaked:', headers);
                     } else {
@@ -104,9 +111,65 @@ async function testInvalidPortCrash() {
     });
 }
 
+async function testPostDataCorruption() {
+    console.log('\n--- Testing POST Data Corruption (Proxy-Authorization keyword) ---');
+    const serverEnv = { ...process.env, PORT: 3133, TUNNEL_PORT: 8083, SKIP_DOTENV: 'true', ENABLE_TLS_PROXY: 'false', BLOCK_LOCAL_NETWORK: 'false' };
+    const clientEnv = { ...process.env, SERVER_URL: 'ws://127.0.0.1:8083', SKIP_DOTENV: 'true', BLOCK_LOCAL_NETWORK: 'false' };
+
+    const server = spawn('node', [path.join(__dirname, 'server', 'proxyServer.js')], { env: serverEnv });
+    const client = spawn('node', [path.join(__dirname, 'client', 'raspberryClient.js')], { env: clientEnv });
+
+    await delay(3000);
+
+    return new Promise((resolve) => {
+        const proxySocket = net.connect(3133, '127.0.0.1', () => {
+            const bodyPayload = "Lorem ipsum proxy-authorization: basic abc\r\ntest";
+            const req = "POST http://127.0.0.1:3000/ HTTP/1.1\r\n" +
+                "Host: 127.0.0.1:3000\r\n" +
+                "Content-Length: " + bodyPayload.length + "\r\n" +
+                "Proxy-Authorization: Basic dXNlcjpwYXNz\r\n" +
+                "Proxy-Connection: keep-alive\r\n" +
+                "\r\n" +
+                bodyPayload;
+            proxySocket.write(req);
+        });
+
+        let dataReceived = '';
+        proxySocket.on('data', d => {
+            dataReceived += d.toString();
+        });
+
+        setTimeout(() => {
+            if (dataReceived.includes('200 OK')) {
+                const bodyMatches = dataReceived.match(/\{.*\}/s);
+                if (bodyMatches) {
+                    try {
+                        const responseBody = JSON.parse(bodyMatches[0]);
+                        if (responseBody.body === "Lorem ipsum proxy-authorization: basic abc\r\ntest") {
+                            console.log('✅ POST data correctly received without corruption!');
+                        } else {
+                            console.error('❌ POST data corrupted. Received body:', responseBody.body);
+                        }
+                    } catch (e) {
+                        console.error('❌ Failed to parse response:', dataReceived);
+                    }
+                }
+            } else {
+                console.error('❌ Proxy request failed to reach dummy server in POST test.');
+            }
+
+            proxySocket.destroy();
+            server.kill();
+            client.kill();
+            resolve();
+        }, 3000);
+    });
+}
+
 async function runTests() {
     await testHeaderStripping();
     await testInvalidPortCrash();
+    await testPostDataCorruption();
     dummyServer.close();
     console.log('\n✅ All Security Patch tests completed successfully!');
     process.exit(0);

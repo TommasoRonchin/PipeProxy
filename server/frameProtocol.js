@@ -1,4 +1,4 @@
-const { TYPES, redactProxyAuth } = require('../shared/frameEncoder');
+const { TYPES } = require('../shared/frameEncoder');
 const { EventEmitter } = require('events');
 
 class FrameProtocol extends EventEmitter {
@@ -94,8 +94,7 @@ class FrameProtocol extends EventEmitter {
 
         // Handle local socket data
         socket.on('data', (data) => {
-            const processedData = socket.isHttpProxy ? redactProxyAuth(data) : data;
-            this.tunnelServer.sendFrame(TYPES.DATA, connectionId, processedData);
+            this.tunnelServer.sendFrame(TYPES.DATA, connectionId, data);
         });
 
         // Cleanup local socket

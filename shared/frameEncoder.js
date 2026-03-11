@@ -41,42 +41,7 @@ function encodeFrame(type, connectionId, payload = null) {
     return buffer;
 }
 
-/**
- * Safely redacts Proxy-Authorization headers from a binary buffer
- * without corrupting binary data using latin1 interpretation.
- * 
- * @param {Buffer} buffer The buffer to redact
- * @returns {Buffer} A new buffer or the same buffer if modified (depending on implementation, here we return a copy if modified)
- */
-function redactProxyAuth(buffer) {
-    if (!buffer || buffer.length < 20) return buffer;
-
-    const latin1Str = buffer.toString('latin1').toLowerCase();
-    if (!latin1Str.includes('proxy-authorization:')) {
-        return buffer;
-    }
-
-    // Work on a copy to avoid side-effects on shared buffers
-    const processed = Buffer.from(buffer);
-    let searchIdx = 0;
-    while (true) {
-        const idx = latin1Str.indexOf('proxy-authorization:', searchIdx);
-        if (idx === -1) break;
-
-        let endIdx = latin1Str.indexOf('\r\n', idx);
-        if (endIdx === -1) endIdx = latin1Str.length;
-
-        // Overwrite with spaces
-        for (let i = idx; i < endIdx; i++) {
-            processed[i] = 0x20;
-        }
-        searchIdx = endIdx + 2;
-    }
-    return processed;
-}
-
 module.exports = {
     TYPES,
-    encodeFrame,
-    redactProxyAuth
+    encodeFrame
 };

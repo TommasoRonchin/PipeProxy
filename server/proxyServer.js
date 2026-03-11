@@ -196,7 +196,8 @@ const proxyConnectionHandler = (socket) => {
             }
 
             if (method !== 'CONNECT') {
-                socket.isHttpProxy = true; // Flag for downstream protection against Pipelining Leaks
+                // We no longer set socket.isHttpProxy because we do not tamper with the raw stream
+                // to avoid data corruption.
             }
 
             // Register connection
@@ -204,7 +205,7 @@ const proxyConnectionHandler = (socket) => {
             if (!connId) return;
 
             const extraData = headerBuffer.subarray(headerEndIdx + 4);
-            const { TYPES, redactProxyAuth } = require('../shared/frameEncoder');
+            const { TYPES } = require('../shared/frameEncoder');
 
             if (method === 'CONNECT') {
                 if (extraData.length > 0) {
@@ -283,9 +284,8 @@ const proxyConnectionHandler = (socket) => {
                     .join('\r\n') + (FORCE_CONNECTION_CLOSE ? '\r\nConnection: close\r\n\r\n' : '\r\n\r\n');
 
                 const safeHeaderBuffer = Buffer.concat([Buffer.from(safeHeaderText, 'utf8'), extraData]);
-                const redactedBuffer = redactProxyAuth(safeHeaderBuffer);
 
-                tunnelServer.sendFrame(TYPES.DATA, connId, redactedBuffer);
+                tunnelServer.sendFrame(TYPES.DATA, connId, safeHeaderBuffer);
             }
         }
     };

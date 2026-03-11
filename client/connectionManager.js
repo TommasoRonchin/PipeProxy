@@ -118,36 +118,56 @@ class ConnectionManager {
             // Real SSRF Protection via DNS Resolution
             this.pendingConnections.set(connectionId, { queue: [], size: 0 }); // Init queue
 
-            dns.lookup(host, { family: 0, all: false }, (err, address, family) => {
+            dns.lookup(host, { family: 0, all: true }, (err, addresses) => {
                 // Check if connection was closed during DNS resolution
                 if (!this.pendingConnections.has(connectionId)) {
                     console.log(`[DEBUG] DNS resolved for ${host} but connection ${connectionId} was already aborted.`);
                     return;
                 }
 
-                if (err) {
-                    console.warn(`[ConnectionManager] Failed to resolve target host ${host}: ${err.message}`);
+                if (err || !addresses || addresses.length === 0) {
+                    console.warn(`[ConnectionManager] Failed to resolve target host ${host}: ${err ? err.message : 'No addresses'}`);
                     this.sendFrame(TYPES.CLOSE, connectionId);
                     this.pendingConnections.delete(connectionId);
                     return;
                 }
 
-                console.log(`[DEBUG] DNS resolved ${host} -> ${address} (family: ${family})`);
+                // Format addresses properly for net.connect's custom lookup
+                const validAddresses = addresses.map(a => ({ address: a.address, family: a.family }));
+                console.log(`[DEBUG] DNS resolved ${host} -> `, validAddresses.map(a => a.address).join(', '));
 
-                if (this.blockLocalNetwork && this.isProtectedIP(address)) {
-                    console.warn(`[ConnectionManager] SSRF Attempt Blocked (DNS Check): Rejected connection to resolved IP ${address} for host ${host}`);
-                    this.sendFrame(TYPES.CLOSE, connectionId);
-                    this.pendingConnections.delete(connectionId);
-                    return;
+                // SSRF Protection: Check all resolved IPs to prevent DNS Rebinding tricks
+                for (const { address } of validAddresses) {
+                    if (this.blockLocalNetwork && this.isProtectedIP(address)) {
+                        console.warn(`[ConnectionManager] SSRF Attempt Blocked (DNS Check): Rejected connection to resolved IP ${address} for host ${host}`);
+                        this.sendFrame(TYPES.CLOSE, connectionId);
+                        this.pendingConnections.delete(connectionId);
+                        return;
+                    }
                 }
 
-                // Create new socket connection to the requested target using the resolved safe IP
-                const socketOptions = { host: address, port };
-                if (family === 4 || family === 6) socketOptions.family = family;
+                // Create new socket connection using Happy Eyeballs (autoSelectFamily) 
+                // We provide a custom lookup function returning OUR pre-verified validAddresses.
+                // This prevents DNS Rebinding (since Node won't resolve again) and 
+                // fixes the IPv6 "blackhole" hang by allowing Node to instantly fallback to IPv4.
+                const socketOptions = {
+                    host: host, // Pass original host for SNI / Host headers
+                    port: port,
+                    autoSelectFamily: true,
+                    autoSelectFamilyAttemptTimeout: process.env.IPV4_FALLBACK_TIMEOUT_MS ? parseInt(process.env.IPV4_FALLBACK_TIMEOUT_MS, 10) : 250, // Default 250ms fallback to IPv4
+                    lookup: (hostname, options, callback) => {
+                        // If options.all is true, Node expects an array, else just the first address.
+                        if (options.all) {
+                            callback(null, validAddresses);
+                        } else {
+                            callback(null, validAddresses[0].address, validAddresses[0].family);
+                        }
+                    }
+                };
 
-                console.log(`[DEBUG] Calling net.connect to`, socketOptions);
+                console.log(`[DEBUG] Calling net.connect to`, { host, port });
                 const socket = net.connect(socketOptions, () => {
-                    console.log(`[DEBUG] net.connect successful to ${address}:${port}`);
+                    console.log(`[DEBUG] net.connect successful to ${host}:${port}`);
                     // Connected! Data stream will start naturally.
                     this.sendFrame(TYPES.OPEN_ACK, connectionId);
                 });

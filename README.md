@@ -107,7 +107,7 @@ curl -U admin:securepassword123 -x http://YOUR_VPS_IP:3128 https://api.ipify.org
 - **Proxy Authentication:** Fully standard `Proxy-Authorization` header parsing implemented natively at the TCP packet level.
 - **Hostname Validation:** The client enforces a `MAX_HOSTNAME_SIZE` (default 2KB) to prevent memory exhaustion from maliciously long target addresses. It also limits the number of targets queuing up for DNS resolution and early-data buffering using `MAX_PENDING_CONNECTIONS` (default 1000).
 - **Zero-JSON Transport:** To maximize throughput, the system encodes routing metadata into a minimal `[ Type(1B) | ConnectionID(4B) | PayloadLength(4B) ]` binary buffer on top of the WebSocket payloads.
-- **IPv6 Support:** Native support for IPv6 target addresses (e.g., `[::1]:80`) in `CONNECT` and `GET` requests, correctly handled during parsing and DNS resolution.
+- **IPv6 & Happy Eyeballs:** Native support for IPv6 target addresses (e.g., `[::1]:80`). The client implements "Happy Eyeballs" (`autoSelectFamily` fallback) to transparently and instantly fallback to IPv4 if an IPv6 route is a "blackhole" (DNS resolves to IPv6 but the host lacks IPv6 internet connectivity), preventing infinite hangs.
 - **Replay Attack Prevention (Advanced):** Strict sequence number tracking within GCM-encrypted frames ensures that intercepted packets cannot be replayed or dropped without triggering an immediate disconnect. Furthermore, rapid reconnections causing memory/service DoS (flapping) are prevented via the `RATE_LIMIT_MS` (default 1000ms) setting.
 
 ---
@@ -213,3 +213,4 @@ You can fine-tune the system behavior by setting these environment variables in 
 #### 🛠️ Routing Behavior
 - `FORCE_CONNECTION_CLOSE=true`: (Server-only) Injects `Connection: close` to prevent smuggling.
 - `REWRITE_PROXY_URLS=true`: (Server-only) Normalizes absolute proxy URLs to paths.
+- `IPV4_FALLBACK_TIMEOUT_MS=250`: (Client-only) Wait time (in ms) before falling back from a dead IPv6 route to IPv4 (Happy Eyeballs).

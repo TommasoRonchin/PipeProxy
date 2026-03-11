@@ -111,6 +111,8 @@ class ConnectionManager {
             // SSRF Protection: Block access to local network IPs
             if (this.blockLocalNetwork && this.isLocalNetwork(host)) {
                 console.warn(`[ConnectionManager] SSRF Attempt Blocked (Fast Check): Rejected connection to ${host}:${port}`);
+                const response = `HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nSSRF Protection: Access to local network [${host}] is blocked.\n`;
+                this.sendFrame(TYPES.DATA, connectionId, Buffer.from(response));
                 this.sendFrame(TYPES.CLOSE, connectionId);
                 return;
             }
@@ -140,6 +142,8 @@ class ConnectionManager {
                 for (const { address } of validAddresses) {
                     if (this.blockLocalNetwork && this.isProtectedIP(address)) {
                         console.warn(`[ConnectionManager] SSRF Attempt Blocked (DNS Check): Rejected connection to resolved IP ${address} for host ${host}`);
+                        const response = `HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nSSRF Protection: Access to local network IP [${address}] is blocked.\n`;
+                        this.sendFrame(TYPES.DATA, connectionId, Buffer.from(response));
                         this.sendFrame(TYPES.CLOSE, connectionId);
                         this.pendingConnections.delete(connectionId);
                         return;

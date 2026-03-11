@@ -22,6 +22,7 @@ async function startTunnelSystem(envOverrides = {}) {
         ENABLE_TLS_PROXY: 'false',
         BLOCK_LOCAL_NETWORK: 'false',
         TUNNEL_SECRET: 'default_test_secret',
+        ENCRYPTION_SECRET: 'default_test_secret',
         ...envOverrides
     };
 
@@ -366,7 +367,60 @@ async function runTests() {
         });
         assert(malformedRes.includes('400 Bad Request'), 'Malformed Request: Gracefully returned 400 on garbage HTTP line');
 
-        stopAllServers();
+        // 4.7 SSRF Local Network Blocking
+        console.log('  Testing SSRF Protection...');
+        let ssrfSys = await startTunnelSystem({ PORT: 3156, TUNNEL_PORT: 8096, BLOCK_LOCAL_NETWORK: 'true' });
+        let ssrfProxyRes = await makeProxyRequest(ssrfSys.proxyPort, '127.0.0.1', 4001, 'GET', '/');
+        assert(ssrfProxyRes.toString().includes('403 Forbidden') && ssrfProxyRes.toString().includes('blocked'), 'SSRF Protection: Client correctly blocks access to local network IP');
+        await stopAllServers();
+
+        // 4.8 HTTP Pipelining
+        console.log('  Testing HTTP Pipelining...');
+        sys = await startTunnelSystem({ PORT: 3157, TUNNEL_PORT: 8097, FORCE_CONNECTION_CLOSE: 'false' });
+        let pipelineRes = await new Promise((resolve) => {
+            const socket = net.connect(sys.proxyPort, '127.0.0.1', () => {
+                const req1 = "GET http://127.0.0.1:4001/pipe1 HTTP/1.1\r\nHost: 127.0.0.1:4001\r\nConnection: keep-alive\r\n\r\n";
+                const req2 = "GET http://127.0.0.1:4001/pipe2 HTTP/1.1\r\nHost: 127.0.0.1:4001\r\nConnection: close\r\n\r\n";
+                socket.write(req1 + req2);
+            });
+            let d = '';
+            socket.on('data', chunk => d += chunk.toString());
+            socket.on('close', () => resolve(d));
+            socket.on('error', () => resolve(d));
+        });
+        assert(pipelineRes.includes('/pipe1') && pipelineRes.includes('/pipe2'), 'HTTP Pipelining: Successfully routed multiple HTTP requests in one TCP packet');
+        await stopAllServers();
+
+        // 4.9 Crypto Replay Attack
+        console.log('  Testing Crypto Replay Mitigations...');
+        const { CryptoStream } = require('./shared/cryptoStream');
+        const testStream = new CryptoStream({ enableEncryption: true, secret: 'default_test_secret', strictSequence: true });
+
+        sys = await startTunnelSystem({ PORT: 3158, TUNNEL_PORT: 8098, ENABLE_ENCRYPTION: 'true' });
+        let replayRejected = await new Promise((resolve) => {
+            const ws = new WebSocket('ws://127.0.0.1:8098', { headers: { 'x-tunnel-secret': 'default_test_secret' } });
+            ws.on('open', () => {
+                const { encodeFrame, TYPES } = require('./shared/frameEncoder');
+                const rawPayload = Buffer.from('127.0.0.1:4001');
+
+                const msg1 = testStream.encryptMessage(rawPayload);
+                const frame1 = encodeFrame(TYPES.OPEN, 9991, msg1);
+                ws.send(frame1);
+
+                setTimeout(() => {
+                    // Send EXACT same encrypted message again (Replay Attack)
+                    ws.send(frame1);
+                }, 100);
+            });
+
+            ws.on('close', (code) => {
+                resolve(code !== 1000);
+            });
+            ws.on('error', () => resolve(true));
+            setTimeout(() => resolve(false), 2000);
+        });
+        assert(replayRejected, 'Crypto Replay Attack: Tunnel server detected and blocked duplicated cryptographic sequence ID');
+        await stopAllServers();
 
 
     } catch (err) {

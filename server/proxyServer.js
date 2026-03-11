@@ -103,15 +103,20 @@ const proxyConnectionHandler = (socket) => {
 
         headerBuffer = Buffer.concat([headerBuffer, chunk]);
 
-        // Slowloris OOM Protection
-        if (headerBuffer.length > MAX_PROXY_HEADER_SIZE) {
+        let headerEndIdx = headerBuffer.indexOf('\r\n\r\n');
+
+        // Slowloris OOM Protection: only apply limit if we haven't found the end of headers yet,
+        // OR if the headers themselves are larger than the limit.
+        if (headerEndIdx === -1 && headerBuffer.length > MAX_PROXY_HEADER_SIZE) {
+            socket.end('HTTP/1.1 431 Request Header Fields Too Large\r\n\r\n');
+            socket.destroy();
+            return;
+        } else if (headerEndIdx !== -1 && headerEndIdx > MAX_PROXY_HEADER_SIZE) {
             socket.end('HTTP/1.1 431 Request Header Fields Too Large\r\n\r\n');
             socket.destroy();
             return;
         }
 
-        // Look for end of HTTP headers
-        const headerEndIdx = headerBuffer.indexOf('\r\n\r\n');
         if (headerEndIdx !== -1) {
             resolved = true;
             clearTimeout(hardTimeoutTimer);

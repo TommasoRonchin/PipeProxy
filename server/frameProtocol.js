@@ -8,7 +8,8 @@ class FrameProtocol extends EventEmitter {
         this.tunnelServer = tunnelServer;
         // Map of connectionId -> socket
         this.connections = new Map();
-        this.nextConnectionId = 1;
+        const startId = parseInt(process.env.DEBUG_START_ID, 10);
+        this.nextConnectionId = isNaN(startId) ? 1 : startId;
 
         const envMaxBuffer = parseInt(process.env.MAX_SOCKET_BUFFER_MB, 10);
         this.maxSocketBuffer = isNaN(envMaxBuffer) ? (1 * 1024 * 1024) : (envMaxBuffer * 1024 * 1024);
@@ -114,6 +115,7 @@ class FrameProtocol extends EventEmitter {
 
     closeAllConnections() {
         for (const [connId, socket] of this.connections) {
+            this.emit('close', connId);
             socket.destroy();
         }
         this.connections.clear();

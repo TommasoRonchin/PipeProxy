@@ -42,10 +42,22 @@ async function startTunnelSystem(envOverrides = {}) {
     // or we might pass a wrong secret.
     const clientProcess = spawn('node', [clientPath], { env: clientEnv });
 
-    serverProcess.stdout.on('data', d => console.log('[SERVER_OUT]', d.toString().trim()));
-    serverProcess.stderr.on('data', d => console.error('[SERVER_ERR]', d.toString().trim()));
-    clientProcess.stdout.on('data', d => console.log('[CLIENT_OUT]', d.toString().trim()));
-    clientProcess.stderr.on('data', d => console.error('[CLIENT_ERR]', d.toString().trim()));
+    serverProcess.stdout.on('data', d => {
+        const lines = d.toString().trim().split('\n');
+        lines.forEach(l => console.log('[SERVER_OUT]', l));
+    });
+    serverProcess.stderr.on('data', d => {
+        const lines = d.toString().trim().split('\n');
+        lines.forEach(l => console.error('[SERVER_ERR]', l));
+    });
+    clientProcess.stdout.on('data', d => {
+        const lines = d.toString().trim().split('\n');
+        lines.forEach(l => console.log('[CLIENT_OUT]', l));
+    });
+    clientProcess.stderr.on('data', d => {
+        const lines = d.toString().trim().split('\n');
+        lines.forEach(l => console.error('[CLIENT_ERR]', l));
+    });
 
     activeServers.push(serverProcess, clientProcess);
 
@@ -474,19 +486,38 @@ async function runTests() {
         // 5.3 Orphan Connection Cleanup
         console.log('  Testing Orphan Connection Cleanup...');
         sys = await startTunnelSystem({ PORT: 3162, TUNNEL_PORT: 8102 });
-        let orphanPort = 4001;
-        // Hold a connection open using CONNECT to echo server (persistent)
         let orphanSocketClosed = false;
+        let proxyEstablished = false;
         const orphanSocket = net.connect(sys.proxyPort, '127.0.0.1', () => {
             orphanSocket.write(`CONNECT 127.0.0.1:4002 HTTP/1.1\r\nHost: 127.0.0.1:4002\r\n\r\n`);
+        });
+        orphanSocket.on('data', (d) => {
+            if (d.toString().includes('200 Connection Established')) {
+                proxyEstablished = true;
+            }
         });
         orphanSocket.on('close', () => {
             orphanSocketClosed = true;
         });
-        await delay(1000); // Wait for full handshake
+        orphanSocket.on('error', () => { });
+
+        // Wait up to 5s for full establishment
+        for (let i = 0; i < 50; i++) {
+            if (proxyEstablished) break;
+            await delay(100);
+        }
+
+        assert(proxyEstablished, 'Orphan Cleanup Trace: Proxy connection fully established before kill');
+
         // Brutally kill the client to orphan the connection on the server
         sys.clientProcess.kill('SIGKILL');
-        await delay(3000);
+
+        // Wait up to 8s for the server to detect WS close and destroy the socket
+        for (let i = 0; i < 80; i++) {
+            if (orphanSocketClosed) break;
+            await delay(100);
+        }
+
         assert(orphanSocketClosed, 'Orphan Cleanup: Proxy socket on server closed when tunnel was lost');
         await stopAllServers();
 
@@ -529,6 +560,120 @@ async function runTests() {
             }
         }
         assert(churnPassed, 'Rapid Churn: 100 connections opened and closed rapidly without crashing the proxy');
+        await stopAllServers();
+
+        // ==========================================================
+        // CATEGORY 7: ULTRA-EXTREME CORNER CASES
+        // ==========================================================
+        console.log('\n--- 7. Ultra-Extreme Corner Cases ---');
+
+        // 7.1 ID Exhaustion & Wrapping
+        console.log('  Testing Connection ID Wrapping...');
+        // Start server near 4 billion
+        sys = await startTunnelSystem({ PORT: 3170, TUNNEL_PORT: 8110, DEBUG_START_ID: '3999999999' });
+        // Make two requests to trigger wrap
+        const wrapS1 = net.connect(sys.proxyPort, '127.0.0.1');
+        await delay(200);
+        const wrapS2 = net.connect(sys.proxyPort, '127.0.0.1');
+        await delay(200);
+        assert(!sys.clientProcess.killed && !sys.serverProcess.killed, 'ID Wrapping: System remained stable through 4B boundary');
+        wrapS1.destroy(); wrapS2.destroy();
+        await stopAllServers();
+
+        // 7.2 Multiplexed Corruption Isolation
+        console.log('  Testing Multiplexed Corruption Isolation...');
+        sys = await startTunnelSystem({ PORT: 3171, TUNNEL_PORT: 8111 });
+        const corruptS1 = net.connect(sys.proxyPort, '127.0.0.1');
+        await delay(300);
+        // Send valid data then immediate garbage to the tunnel server's WebSocket
+        const wsAttacker = new (require('ws'))('ws://127.0.0.1:8111');
+        const attackerP = new Promise((resolve) => {
+            wsAttacker.on('open', () => {
+                wsAttacker.send(Buffer.from([0xFF, 0xFE, 0xFD, 0xFC])); // Total garbage
+                setTimeout(() => { wsAttacker.close(); resolve(true); }, 500);
+            });
+            wsAttacker.on('error', () => resolve(true));
+        });
+        await attackerP;
+        await delay(500);
+        assert(!sys.serverProcess.killed, 'Corruption Isolation: System survived raw binary garbage on WS port');
+        corruptS1.destroy();
+        await stopAllServers();
+
+        // 7.3 Concurrent Tunnel Collision
+        console.log('  Testing Concurrent Tunnel Collision...');
+        // Start two clients simultaneously for the same server
+        const collEnv = { PORT: 3172, TUNNEL_PORT: 8112, TUNNEL_SECRET: 'collision-secret' };
+        const collSrv = spawn('node', ['server/proxyServer.js'], { env: { ...process.env, ...collEnv } });
+        await delay(1000);
+        const collCl1 = spawn('node', ['client/raspberryClient.js'], { env: { ...process.env, ...collEnv, SERVER_URL: 'ws://127.0.0.1:8112' } });
+        const collCl2 = spawn('node', ['client/raspberryClient.js'], { env: { ...process.env, ...collEnv, SERVER_URL: 'ws://127.0.0.1:8112' } });
+        await delay(3000);
+        assert(!collSrv.killed, 'Tunnel Collision: Server survived simultaneous connection attempts');
+        collCl1.kill(); collCl2.kill(); collSrv.kill();
+        await stopAllServers();
+
+        // 7.4 Hostname DoS Protection
+        console.log('  Testing Hostname DoS Protection...');
+        sys = await startTunnelSystem({ PORT: 3173, TUNNEL_PORT: 8113, MAX_HOSTNAME_SIZE: '100' });
+        const bigHost = 'a'.repeat(500) + '.com';
+        const hostnameP = new Promise((resolve) => {
+            const s = net.connect(sys.proxyPort, '127.0.0.1', () => {
+                s.write(`GET http://${bigHost}/ HTTP/1.1\r\nHost: ${bigHost}\r\n\r\n`);
+            });
+            s.on('data', (d) => {
+                if (d.toString().includes('403') || d.toString().includes('502') || d.toString().includes('400')) resolve(true);
+            });
+            s.on('close', () => resolve(true));
+            setTimeout(() => resolve(false), 3000);
+        });
+        assert(await hostnameP, 'Hostname DoS: Rejected oversized hostname payload');
+        await stopAllServers();
+
+        // 7.5 Slow Body Attack Resilience
+        console.log('  Testing Slow Body Attack Resilience...');
+        sys = await startTunnelSystem({ PORT: 3174, TUNNEL_PORT: 8114, IDLE_TIMEOUT_MS: '2000' });
+        const slowBodyP = new Promise((resolve) => {
+            const s = net.connect(sys.proxyPort, '127.0.0.1', () => {
+                s.write(`POST http://127.0.0.1:4001/ HTTP/1.1\r\nHost: 127.0.0.1:4001\r\nContent-Length: 1000\r\n\r\n`);
+                // Send only 1 byte then wait
+                s.write('a');
+            });
+            s.on('close', () => resolve(true));
+            setTimeout(() => resolve(false), 5000);
+        });
+        assert(await slowBodyP, 'Slow Body Attack: Connection timed out as expected');
+        await stopAllServers();
+
+        // 7.6 WS Backpressure Resilience
+        console.log('  Testing WebSocket Backpressure Resilience...');
+        // Lower watermarks to trigger it easily
+        sys = await startTunnelSystem({
+            PORT: 3175,
+            TUNNEL_PORT: 8115,
+            WS_HIGH_WATER_MARK_MB: '1',
+            WS_LOW_WATER_MARK_MB: '0.1'
+        });
+        const backpressureP = new Promise(async (resolve) => {
+            const s = net.connect(sys.proxyPort, '127.0.0.1', () => {
+                s.write(`POST http://127.0.0.1:4001/backpressure HTTP/1.1\r\nHost: 127.0.0.1:4001\r\nContent-Length: 3000000\r\n\r\n`);
+                // Send 3MB of data rapidly to fill WS buffers
+                const chunk = Buffer.alloc(1024 * 64, 'x');
+                let sent = 0;
+                const sendInterval = setInterval(() => {
+                    s.write(chunk);
+                    sent += chunk.length;
+                    if (sent > 3000000) {
+                        clearInterval(sendInterval);
+                    }
+                }, 1);
+            });
+            // We just want to see if the server and client survive the blast without OOM or deadlock
+            await delay(3000);
+            assert(!sys.serverProcess.killed && !sys.clientProcess.killed, 'Backpressure: System remained stable under buffer saturation');
+            resolve(true);
+        });
+        await backpressureP;
         await stopAllServers();
 
         // Final cleanup

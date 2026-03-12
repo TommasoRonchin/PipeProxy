@@ -108,6 +108,44 @@ You can easily run both components in isolated Docker containers to prevent envi
      pipeproxy-client
    ```
 
+### 4. PM2 Deployment (Recommended)
+
+PM2 keeps PipeProxy running in the background and restarts it if it crashes or if the system reboots.
+
+1. **Install PM2**:
+   ```bash
+   npm install -g pm2
+   ```
+
+2. **Start the process**:
+   **On the VPS (Server):**
+   ```bash
+   pm2 start server/proxyServer.js --name pipeproxy-server
+   ```
+   **On the Raspberry Pi (Client):**
+   ```bash
+   pm2 start client/raspberryClient.js --name pipeproxy-client
+   ```
+
+3. **Enable Start on Boot**:
+   To make sure processes restart automatically after a system reboot:
+   ```bash
+   pm2 startup
+   ```
+   *Copy and paste the command that PM2 prints to your terminal to setup the startup script.*
+   
+   Then, save the current process list:
+   ```bash
+   pm2 save
+   ```
+
+4. **Useful Commands**:
+   ```bash
+   pm2 status  # Check status
+   pm2 logs    # Show logs
+   pm2 stop all
+   ```
+
 ---
 
 ## 🔒 Usage & Testing

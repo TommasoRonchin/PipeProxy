@@ -19,6 +19,9 @@ class CryptoStream {
         // Replay attack prevention: sequence numbers per instance
         this.outSeq = 0;
         this.expectedInSeq = 0;
+
+        // Pre-allocate sequence buffer to avoid per-message allocation
+        this.seqBuffer = Buffer.allocUnsafe(4);
     }
 
     /**
@@ -33,7 +36,7 @@ class CryptoStream {
         if (!this.isEncryptionEnabled) return buffer;
 
         const payloadLength = buffer.length;
-        // Total size: IV(12) + Tag(16) + CipherText(payloadLength + Seq(4))
+        // Total size: IV(12) + Tag(16) + CipherText(Seq(4) + payloadLength)
         const outBuffer = Buffer.allocUnsafe(12 + 16 + payloadLength + 4);
         
         // 1. Generate IV directly into the output buffer
@@ -42,24 +45,30 @@ class CryptoStream {
 
         const cipher = crypto.createCipheriv('aes-256-gcm', this.key, iv);
 
-        // 2. Setup Sequence Number buffer (temporary, small)
-        const seqBuffer = Buffer.allocUnsafe(4);
-        seqBuffer.writeUInt32BE(this.outSeq, 0);
+        // 2. Setup Sequence Number
+        this.seqBuffer.writeUInt32BE(this.outSeq, 0);
         this.outSeq = (this.outSeq + 1) >>> 0;
 
         // 3. Encrypt: Sequence + Payload
+        // We use a small optimization here: update with sequence, then update with buffer
         let offset = 28;
-        const c1 = cipher.update(seqBuffer);
-        c1.copy(outBuffer, offset);
-        offset += c1.length;
+        const c1 = cipher.update(this.seqBuffer);
+        if (c1.length > 0) {
+            c1.copy(outBuffer, offset);
+            offset += c1.length;
+        }
 
         const c2 = cipher.update(buffer);
-        c2.copy(outBuffer, offset);
-        offset += c2.length;
+        if (c2.length > 0) {
+            c2.copy(outBuffer, offset);
+            offset += c2.length;
+        }
 
         const cf = cipher.final();
-        cf.copy(outBuffer, offset);
-        offset += cf.length;
+        if (cf.length > 0) {
+            cf.copy(outBuffer, offset);
+            offset += cf.length;
+        }
 
         // Verify that we haven't leaked any uninitialized memory in outBuffer
         if (offset !== outBuffer.length) {
@@ -89,15 +98,7 @@ class CryptoStream {
         const decipher = crypto.createDecipheriv('aes-256-gcm', this.key, iv);
         decipher.setAuthTag(authTag);
 
-        const decryptedPayloadWithSeq = Buffer.allocUnsafe(encrypted.length);
-        const u1 = decipher.update(encrypted);
-        u1.copy(decryptedPayloadWithSeq, 0);
-        const f1 = decipher.final();
-        f1.copy(decryptedPayloadWithSeq, u1.length);
-        
-        if (u1.length + f1.length !== decryptedPayloadWithSeq.length) {
-             throw new Error("Decryption Length Mismatch");
-        }
+        const decryptedPayloadWithSeq = Buffer.concat([decipher.update(encrypted), decipher.final()]);
 
         // Extract and verify Sequence Number
         if (decryptedPayloadWithSeq.length < 4) {
@@ -137,7 +138,9 @@ function timingSafeEqual(a, b) {
 
     if (typeof a !== 'string' || typeof b !== 'string') {
         if (!Buffer.isBuffer(a) || !Buffer.isBuffer(b)) {
-            return a === b; // Fallback for non-string/buffer types
+            // If they are different types and not both buffers/strings, they can't be equal
+            if (typeof a !== typeof b) return false;
+            return a === b; // Fallback for other identical types (numbers, etc)
         }
     }
 

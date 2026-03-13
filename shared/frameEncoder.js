@@ -7,6 +7,9 @@ const TYPES = {
     OPEN_ACK: 6,
 };
 
+const envMaxMb = parseInt(process.env.MAX_ENCODE_FRAME_SIZE_MB, 10);
+const MAX_ENCODE_SIZE = isNaN(envMaxMb) ? (50 * 1024 * 1024) : (envMaxMb * 1024 * 1024);
+
 /**
  * Encodes a frame into a binary buffer.
  * Frame format:
@@ -20,12 +23,9 @@ const TYPES = {
 function encodeFrame(type, connectionId, payload = null) {
     const payloadLength = payload ? payload.length : 0;
 
-    const envMaxMb = parseInt(process.env.MAX_ENCODE_FRAME_SIZE_MB, 10);
-    const maxEncodeSize = isNaN(envMaxMb) ? (50 * 1024 * 1024) : (envMaxMb * 1024 * 1024);
-
     // Safety guard against ridiculous buffer allocations leading to OOM (Denial of Service)
-    if (payloadLength > maxEncodeSize) {
-        throw new Error(`[FrameEncoder] CRITICAL: Attempted to encode a frame exceeding ${maxEncodeSize / (1024 * 1024)}MB limit (${payloadLength} bytes). Payload rejected to prevent OOM.`);
+    if (payloadLength > MAX_ENCODE_SIZE) {
+        throw new Error(`[FrameEncoder] CRITICAL: Attempted to encode a frame exceeding ${MAX_ENCODE_SIZE / (1024 * 1024)}MB limit (${payloadLength} bytes). Payload rejected to prevent OOM.`);
     }
 
     const buffer = Buffer.allocUnsafe(9 + payloadLength);

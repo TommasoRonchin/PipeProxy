@@ -93,6 +93,10 @@ class FrameDecoder extends EventEmitter {
             }
             if (offset === n) break;
         }
+        
+        if (offset !== n) {
+            throw new Error(`Decoder Integrity Fault (Peek): Expected ${n} bytes, only found ${offset}`);
+        }
         return buffer;
     }
 
@@ -125,6 +129,10 @@ class FrameDecoder extends EventEmitter {
                 } else {
                     this.chunks[0] = chunk.subarray(toCopy);
                 }
+            }
+
+            if (offset !== n) {
+                throw new Error(`Decoder Integrity Fault (Consume): Expected ${n} bytes, only found ${offset}. State corrupted.`);
             }
         }
         this.totalLength -= n;

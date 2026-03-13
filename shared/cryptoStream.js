@@ -89,9 +89,15 @@ class CryptoStream {
         const decipher = crypto.createDecipheriv('aes-256-gcm', this.key, iv);
         decipher.setAuthTag(authTag);
 
-        // Decrypt. Decipher.update/final return new buffers. 
-        // We only concat once here.
-        const decryptedPayloadWithSeq = Buffer.concat([decipher.update(encrypted), decipher.final()]);
+        const decryptedPayloadWithSeq = Buffer.allocUnsafe(encrypted.length);
+        const u1 = decipher.update(encrypted);
+        u1.copy(decryptedPayloadWithSeq, 0);
+        const f1 = decipher.final();
+        f1.copy(decryptedPayloadWithSeq, u1.length);
+        
+        if (u1.length + f1.length !== decryptedPayloadWithSeq.length) {
+             throw new Error("Decryption Length Mismatch");
+        }
 
         // Extract and verify Sequence Number
         if (decryptedPayloadWithSeq.length < 4) {

@@ -32,24 +32,45 @@ class CryptoStream {
     encryptMessage(buffer) {
         if (!this.isEncryptionEnabled) return buffer;
 
-        // Generate a random 12-byte Initialization Vector (IV) for GCM mode
-        const iv = crypto.randomBytes(12);
+        const payloadLength = buffer.length;
+        // Total size: IV(12) + Tag(16) + CipherText(payloadLength + Seq(4))
+        const outBuffer = Buffer.allocUnsafe(12 + 16 + payloadLength + 4);
+        
+        // 1. Generate IV directly into the output buffer
+        const iv = outBuffer.subarray(0, 12);
+        crypto.randomFillSync(iv);
+
         const cipher = crypto.createCipheriv('aes-256-gcm', this.key, iv);
 
-        // Replay Attack Protection: Embed an incremental 4-byte Sequence Number inside the encrypted payload
-        const seqBuffer = Buffer.alloc(4);
+        // 2. Setup Sequence Number buffer (temporary, small)
+        const seqBuffer = Buffer.allocUnsafe(4);
         seqBuffer.writeUInt32BE(this.outSeq, 0);
-        this.outSeq = (this.outSeq + 1) >>> 0; // Increment and wrap securely at 32-bit limit
+        this.outSeq = (this.outSeq + 1) >>> 0;
 
-        // Encrypt the payload prefixed with the Sequence Number
-        const payloadWithSeq = Buffer.concat([seqBuffer, buffer]);
-        const encrypted = Buffer.concat([cipher.update(payloadWithSeq), cipher.final()]);
+        // 3. Encrypt: Sequence + Payload
+        let offset = 28;
+        const c1 = cipher.update(seqBuffer);
+        c1.copy(outBuffer, offset);
+        offset += c1.length;
 
-        // Get the Authentication Tag (16 bytes by default in GCM)
+        const c2 = cipher.update(buffer);
+        c2.copy(outBuffer, offset);
+        offset += c2.length;
+
+        const cf = cipher.final();
+        cf.copy(outBuffer, offset);
+        offset += cf.length;
+
+        // Verify that we haven't leaked any uninitialized memory in outBuffer
+        if (offset !== outBuffer.length) {
+             throw new Error(`CRITICAL: Encryption length mismatch. Expected ${outBuffer.length}, got ${offset}`);
+        }
+
+        // 4. Get Auth Tag and put it in its place (offset 12)
         const authTag = cipher.getAuthTag();
+        authTag.copy(outBuffer, 12);
 
-        // Transport packet structure: [ IV (12) ][ AuthTag (16) ][ CipherText ]
-        return Buffer.concat([iv, authTag, encrypted]);
+        return outBuffer;
     }
 
     decryptMessage(buffer) {
@@ -60,7 +81,7 @@ class CryptoStream {
             throw new Error('Encrypted payload too short to contain IV and AuthTag');
         }
 
-        // Extract IV (12 bytes), AuthTag (16 bytes) and the encrypted data
+        // Extract IV (12 bytes), AuthTag (16 bytes) and the encrypted data using subarrays (no copy)
         const iv = buffer.subarray(0, 12);
         const authTag = buffer.subarray(12, 28);
         const encrypted = buffer.subarray(28);
@@ -68,17 +89,16 @@ class CryptoStream {
         const decipher = crypto.createDecipheriv('aes-256-gcm', this.key, iv);
         decipher.setAuthTag(authTag);
 
+        // Decrypt. Decipher.update/final return new buffers. 
+        // We only concat once here.
         const decryptedPayloadWithSeq = Buffer.concat([decipher.update(encrypted), decipher.final()]);
 
-        // Extract and verify Sequence Number to prevent Replay Attacks
+        // Extract and verify Sequence Number
         if (decryptedPayloadWithSeq.length < 4) {
             throw new Error('Encrypted payload missing sequence number');
         }
 
         const seq = decryptedPayloadWithSeq.readUInt32BE(0);
-
-        // Expected strict incrementing.
-        // We use unsigned 32-bit arithmetic to safely handle the integer wrap around 4.2 billion
         const diff = (seq - this.expectedInSeq) >>> 0;
 
         if (this.isStrictSequenceEnabled) {
@@ -86,15 +106,11 @@ class CryptoStream {
                 throw new Error(`Replay Attack Detected: Received sequence ${seq}, expected exactly ${this.expectedInSeq}`);
             }
         } else {
-            // If diff > 2 billion, we assume it's a very old packet (or wrap-around error)
-            // This allows late packets to arrive out of order but drops severely delayed or replayed packets
             if (diff > 2147483647) {
                 throw new Error(`Replay Attack Detected: Received sequence ${seq}, expected at least ${this.expectedInSeq}`);
             }
         }
 
-        // Update our tracker for the next acceptable message
-        // If strict, we just increment. If non-strict, we jump forward if we received a newer packet
         this.expectedInSeq = (diff === 0 || this.isStrictSequenceEnabled)
             ? ((this.expectedInSeq + 1) >>> 0)
             : ((seq + 1) >>> 0);

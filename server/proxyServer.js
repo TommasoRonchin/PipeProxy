@@ -20,6 +20,8 @@ const net = require('net');
 const tls = require('tls');
 const TunnelServer = require('./tunnelServer');
 const FrameProtocol = require('./frameProtocol');
+const { timingSafeEqual, CryptoStream } = require('../shared/cryptoStream');
+const { encodeFrame, TYPES } = require('../shared/frameEncoder');
 
 const PROXY_PORT = process.env.PORT || 3128;
 const TUNNEL_PORT = process.env.TUNNEL_PORT || 8080;
@@ -56,7 +58,6 @@ function validateAuth(headerText) {
     const username = credentials.substring(0, splitIdx);
     const password = credentials.substring(splitIdx + 1);
 
-    const { timingSafeEqual } = require('../shared/cryptoStream');
     return timingSafeEqual(username, PROXY_AUTH_USERNAME) && timingSafeEqual(password, PROXY_AUTH_PASSWORD);
 }
 
@@ -103,195 +104,155 @@ const proxyConnectionHandler = (socket) => {
 
         headerBuffer = Buffer.concat([headerBuffer, chunk]);
 
-        let headerEndIdx = headerBuffer.indexOf('\r\n\r\n');
+        const headerEndIdx = headerBuffer.indexOf('\r\n\r\n');
 
-        // Slowloris OOM Protection: only apply limit if we haven't found the end of headers yet,
-        // OR if the headers themselves are larger than the limit.
-        if (headerEndIdx === -1 && headerBuffer.length > MAX_PROXY_HEADER_SIZE) {
-            socket.end('HTTP/1.1 431 Request Header Fields Too Large\r\n\r\n');
-            socket.destroy();
-            return;
-        } else if (headerEndIdx !== -1 && headerEndIdx > MAX_PROXY_HEADER_SIZE) {
+        // Slowloris OOM Protection
+        if (headerEndIdx === -1) {
+             if (headerBuffer.length > MAX_PROXY_HEADER_SIZE) {
+                socket.end('HTTP/1.1 431 Request Header Fields Too Large\r\n\r\n');
+                socket.destroy();
+             }
+             return;
+        }
+
+        if (headerEndIdx > MAX_PROXY_HEADER_SIZE) {
             socket.end('HTTP/1.1 431 Request Header Fields Too Large\r\n\r\n');
             socket.destroy();
             return;
         }
 
-        if (headerEndIdx !== -1) {
-            resolved = true;
-            clearTimeout(hardTimeoutTimer);
-            socket.removeListener('data', onData);
+        resolved = true;
+        clearTimeout(hardTimeoutTimer);
+        socket.removeListener('data', onData);
 
-            // Set Idle Timeout to prevent connections from hanging indefinitely
-            const IDLE_TIMEOUT_MS = process.env.IDLE_TIMEOUT_MS ? parseInt(process.env.IDLE_TIMEOUT_MS, 10) : 60000;
-            socket.setTimeout(IDLE_TIMEOUT_MS);
-            socket.on('timeout', () => {
-                console.warn(`[ProxyServer] Connection idle timeout reached, closing socket`);
-                socket.end();
-                socket.destroy();
-            });
+        // Set Idle Timeout
+        const IDLE_TIMEOUT_MS = process.env.IDLE_TIMEOUT_MS ? parseInt(process.env.IDLE_TIMEOUT_MS, 10) : 60000;
+        socket.setTimeout(IDLE_TIMEOUT_MS);
+        socket.on('timeout', () => {
+            console.warn(`[ProxyServer] Connection idle timeout reached, closing socket`);
+            socket.end();
+            socket.destroy();
+        });
 
-            const headerText = headerBuffer.subarray(0, headerEndIdx).toString('utf8');
+        const headerText = headerBuffer.subarray(0, headerEndIdx).toString('utf8');
 
-            // Perform Proxy Authentication
-            if (!validateAuth(headerText)) {
-                console.warn(`[ProxyServer] Authentication failed for a request`);
-                socket.end('HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm="PipeProxy"\r\n\r\n');
-                setImmediate(() => socket.destroy());
-                return;
-            }
+        // Perform Proxy Authentication
+        if (!validateAuth(headerText)) {
+            console.warn(`[ProxyServer] Authentication failed`);
+            socket.end('HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm="PipeProxy"\r\n\r\n');
+            setImmediate(() => socket.destroy());
+            return;
+        }
 
-            const lines = headerText.split('\r\n');
-            const reqLine = lines[0];
+        // Fast path for request line parsing
+        const firstLineEnd = headerBuffer.indexOf('\r\n');
+        const reqLine = headerBuffer.subarray(0, firstLineEnd).toString('utf8');
+        const match = reqLine.match(/^([A-Z]+)\s+([^\s]+)\s+HTTP/);
+        
+        if (!match) {
+            socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
+            setImmediate(() => socket.destroy());
+            return;
+        }
 
-            // Parse request line: e.g. "CONNECT google.com:443 HTTP/1.1" or "GET http://example.com/ HTTP/1.1"
-            const match = reqLine.match(/^([A-Z]+)\s+([^\s]+)\s+HTTP/);
-            if (!match) {
-                console.warn(`[ProxyServer] Malformed request line: ${reqLine}`);
-                socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
-                setImmediate(() => socket.destroy());
-                return;
-            }
+        const method = match[1];
+        const target = match[2];
+        let host = null, port = 80;
 
-            const method = match[1];
-            const target = match[2];
-
-            let host = null;
-            let port = 80;
-
-            if (method === 'CONNECT') {
-                const lastColonIdx = target.lastIndexOf(':');
-                if (lastColonIdx !== -1 && (target.indexOf(']') === -1 || target.indexOf(']') < lastColonIdx)) {
-                    host = target.substring(0, lastColonIdx);
-                    port = parseInt(target.substring(lastColonIdx + 1), 10) || 443;
-                } else {
-                    host = target;
-                    port = 443;
-                }
-                // Remove brackets if IPv6
-                if (host.startsWith('[') && host.endsWith(']')) {
-                    host = host.substring(1, host.length - 1);
-                }
+        if (method === 'CONNECT') {
+            const lastColonIdx = target.lastIndexOf(':');
+            if (lastColonIdx !== -1 && (target.indexOf(']') === -1 || target.indexOf(']') < lastColonIdx)) {
+                host = target.substring(0, lastColonIdx);
+                port = parseInt(target.substring(lastColonIdx + 1), 10) || 443;
             } else {
-                // Plain HTTP proxy requests like http://example.com:8080/path
-                try {
-                    const urlObj = new URL(target);
-                    host = urlObj.hostname;
-                    port = urlObj.port ? parseInt(urlObj.port, 10) : 80;
-                } catch (err) {
-                    console.warn(`[ProxyServer] Failed to parse URL: ${target}`);
-                    socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
-                    setImmediate(() => socket.destroy());
-                    return;
-                }
+                host = target;
+                port = 443;
             }
-
-            if (!host || isNaN(port) || port <= 0 || port > 65535) {
-                console.warn(`[ProxyServer] Rejecting request: Invalid host or port (${host}:${port})`);
+            if (host.startsWith('[') && host.endsWith(']')) host = host.substring(1, host.length - 1);
+        } else {
+            try {
+                const urlObj = new URL(target);
+                host = urlObj.hostname;
+                port = urlObj.port ? parseInt(urlObj.port, 10) : 80;
+            } catch {
                 socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
                 setImmediate(() => socket.destroy());
                 return;
             }
+        }
 
-            // Check tunnel readiness ONLY when we are actually ready to proxy
-            if (!tunnelServer.isReady()) {
-                socket.end('HTTP/1.1 502 Bad Gateway\r\n\r\nTunnel not connected\n');
-                setImmediate(() => socket.destroy());
-                return;
+        if (!host || isNaN(port) || port <= 0 || port > 65535) {
+            socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
+            setImmediate(() => socket.destroy());
+            return;
+        }
+
+        if (!tunnelServer.isReady()) {
+            socket.end('HTTP/1.1 502 Bad Gateway\r\n\r\nTunnel not connected\n');
+            setImmediate(() => socket.destroy());
+            return;
+        }
+
+        const connId = protocol.registerConnection(socket, host, port);
+        if (!connId) return;
+
+        const extraData = headerBuffer.subarray(headerEndIdx + 4);
+
+        if (method === 'CONNECT') {
+            if (extraData.length > 0) {
+                tunnelServer.sendFrame(TYPES.DATA, connId, extraData);
             }
 
-            if (method !== 'CONNECT') {
-                // We no longer set socket.isHttpProxy because we do not tamper with the raw stream
-                // to avoid data corruption.
-            }
-
-            // Register connection
-            const connId = protocol.registerConnection(socket, host, port);
-            if (!connId) return;
-
-            const extraData = headerBuffer.subarray(headerEndIdx + 4);
-            const { TYPES } = require('../shared/frameEncoder');
-
-            if (method === 'CONNECT') {
-                if (extraData.length > 0) {
-                    tunnelServer.sendFrame(TYPES.DATA, connId, extraData);
-                }
-
-                const onOpenAck = (ackConnId) => {
-                    if (ackConnId === connId) {
-                        protocol.removeListener('open_ack', onOpenAck);
-                        protocol.removeListener('close', onClose);
-                        if (!socket.destroyed) {
-                            socket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
-                        }
-                    }
-                };
-
-                const onClose = (closeConnId) => {
-                    if (closeConnId === connId) {
-                        protocol.removeListener('open_ack', onOpenAck);
-                        protocol.removeListener('close', onClose);
-                        if (!socket.destroyed && socket.writable) {
-                            socket.end('HTTP/1.1 502 Bad Gateway\r\n\r\nConnection Refused by Target\r\n\r\n');
-                        }
-                        if (!socket.destroyed) socket.destroy();
-                    }
-                };
-
-                protocol.on('open_ack', onOpenAck);
-                protocol.on('close', onClose);
-
-                socket.on('close', () => {
+            const onOpenAck = (ackConnId) => {
+                if (ackConnId === connId) {
                     protocol.removeListener('open_ack', onOpenAck);
                     protocol.removeListener('close', onClose);
-                });
-            } else {
-                // For standard HTTP proxy request, forward the payload upstream.
-                // We must strip Proxy-Authorization to prevent credential leakage.
-
-                const linesToFilter = headerText.split('\r\n');
-
-                // Rewrite first line to use absolute path instead of absolute URL (customizable)
-                const reqLineMatch = linesToFilter[0].match(/^([A-Z]+)\s+([^\s]+)\s+(HTTP\/[1-9\.]+)$/);
-                if (reqLineMatch && REWRITE_PROXY_URLS) {
-                    try {
-                        const urlObj = new URL(reqLineMatch[2]);
-                        const pathTarget = (urlObj.pathname || '/') + (urlObj.search || '');
-                        linesToFilter[0] = `${reqLineMatch[1]} ${pathTarget} ${reqLineMatch[3]}`;
-                    } catch (e) {
-                        // Ignore error, keep original line if parsing fails
-                    }
+                    if (!socket.destroyed) socket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
                 }
+            };
 
-                const hopByHopHeaders = [
-                    'proxy-authorization',
-                    'proxy-connection',
-                    'connection',
-                    'keep-alive',
-                    'upgrade',
-                    'te',
-                    'trailer'
-                ];
+            const onClose = (closeConnId) => {
+                if (closeConnId === connId) {
+                    protocol.removeListener('open_ack', onOpenAck);
+                    protocol.removeListener('close', onClose);
+                    if (!socket.destroyed && socket.writable) {
+                        socket.end('HTTP/1.1 502 Bad Gateway\r\n\r\nConnection Refused by Target\r\n\r\n');
+                    }
+                    if (!socket.destroyed) socket.destroy();
+                }
+            };
 
-                const safeHeaderText = linesToFilter
-                    .filter(line => {
-                        const colonIdx = line.indexOf(':');
-                        if (colonIdx === -1) {
-                            // If it doesn't have a colon, it's either the request line, 
-                            // or it's a folded header (which is obsolete and invalid for authorization/sensitive headers anyway).
-                            // We allow the HTTP method line (starts with GET, POST, CONNECT, etc)
-                            const isRequestLine = /^[A-Z]+\s+/.test(line);
-                            return isRequestLine;
-                        }
-                        const headerName = line.substring(0, colonIdx).trim().toLowerCase();
-                        return !hopByHopHeaders.includes(headerName);
-                    })
-                    .join('\r\n') + (FORCE_CONNECTION_CLOSE ? '\r\nConnection: close\r\n\r\n' : '\r\n\r\n');
-
-                const safeHeaderBuffer = Buffer.concat([Buffer.from(safeHeaderText, 'utf8'), extraData]);
-
-                tunnelServer.sendFrame(TYPES.DATA, connId, safeHeaderBuffer);
+            protocol.on('open_ack', onOpenAck);
+            protocol.on('close', onClose);
+            socket.on('close', () => {
+                protocol.removeListener('open_ack', onOpenAck);
+                protocol.removeListener('close', onClose);
+            });
+        } else {
+            // Forward HTTP request, filter hop-by-hop headers
+            const lines = headerText.split('\r\n');
+            
+            // Rewrite first line if needed
+            if (REWRITE_PROXY_URLS) {
+                try {
+                    const urlObj = new URL(target);
+                    const pathTarget = (urlObj.pathname || '/') + (urlObj.search || '');
+                    lines[0] = `${method} ${pathTarget} HTTP/1.1`;
+                } catch {}
             }
+
+            const hopByHopHeaders = ['proxy-authorization', 'proxy-connection', 'connection', 'keep-alive', 'upgrade', 'te', 'trailer'];
+            const filteredLines = lines.filter((line, idx) => {
+                if (idx === 0) return true;
+                const colonIdx = line.indexOf(':');
+                if (colonIdx === -1) return false;
+                const name = line.substring(0, colonIdx).trim().toLowerCase();
+                return !hopByHopHeaders.includes(name);
+            });
+
+            const safeHeader = filteredLines.join('\r\n') + (FORCE_CONNECTION_CLOSE ? '\r\nConnection: close\r\n\r\n' : '\r\n\r\n');
+            const packet = Buffer.concat([Buffer.from(safeHeader, 'utf8'), extraData]);
+            tunnelServer.sendFrame(TYPES.DATA, connId, packet);
         }
     };
 

@@ -28,7 +28,7 @@ function encodeFrame(type, connectionId, payload = null) {
         throw new Error(`[FrameEncoder] CRITICAL: Attempted to encode a frame exceeding ${maxEncodeSize / (1024 * 1024)}MB limit (${payloadLength} bytes). Payload rejected to prevent OOM.`);
     }
 
-    const buffer = Buffer.alloc(9 + payloadLength);
+    const buffer = Buffer.allocUnsafe(9 + payloadLength);
 
     buffer.writeUInt8(type, 0);
     buffer.writeUInt32BE(connectionId, 1);

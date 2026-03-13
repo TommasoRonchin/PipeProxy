@@ -7,7 +7,8 @@ const { EventEmitter } = require('events');
 class FrameDecoder extends EventEmitter {
     constructor() {
         super();
-        this.buffer = Buffer.alloc(0);
+        this.chunks = [];
+        this.totalLength = 0;
 
         // Configurable Maximum Frame Size to prevent OOM DOS attacks
         const envMax = parseInt(process.env.MAX_FRAME_SIZE, 10);
@@ -20,52 +21,114 @@ class FrameDecoder extends EventEmitter {
      * @param {Buffer} chunk 
      */
     push(chunk) {
+        if (!chunk || chunk.length === 0) return; // Ignore empty chunks
+
         // Prevent total buffer from growing too large (Aggregation DoS Protection)
-        if (this.buffer.length + chunk.length > this.maxFrameSize * 2) {
+        if (this.totalLength + chunk.length > this.maxFrameSize * 2) {
             this.emit('error', new Error(`Total decoder buffer exceeded safety limit.`));
-            this.buffer = Buffer.alloc(0);
+            this.chunks = [];
+            this.totalLength = 0;
             return;
         }
 
-        this.buffer = Buffer.concat([this.buffer, chunk]);
+        this.chunks.push(chunk);
+        this.totalLength += chunk.length;
         this._processBuffer();
     }
 
     _processBuffer() {
-        while (this.buffer.length >= 9) {
-            // Read the 9-byte header
-            const type = this.buffer.readUInt8(0);
-            const connectionId = this.buffer.readUInt32BE(1);
-            const length = this.buffer.readUInt32BE(5);
+        try {
+            while (this.totalLength >= 9) {
+                // Read the 9-byte header without concatenating everything
+                const header = this._peek(9);
+                const type = header.readUInt8(0);
+                const connectionId = header.readUInt32BE(1);
+                const length = header.readUInt32BE(5);
 
-            // Prevent OOM Attacks (Single Frame Limit)
-            if (length > this.maxFrameSize) {
-                this.emit('error', new Error(`Frame too large: ${length} bytes exceeds maximum allowed of ${this.maxFrameSize} bytes.`));
-                this.buffer = Buffer.alloc(0);
-                return;
+                // Prevent OOM Attacks (Single Frame Limit)
+                if (length > this.maxFrameSize) {
+                    this.emit('error', new Error(`Frame too large: ${length} bytes exceeds maximum allowed of ${this.maxFrameSize} bytes.`));
+                    this.chunks = [];
+                    this.totalLength = 0;
+                    return;
+                }
+
+                const totalFrameLength = 9 + length;
+
+                if (this.totalLength >= totalFrameLength) {
+                    // We have a complete frame. Consume header + payload.
+                    this._consume(9); 
+                    const payload = length > 0 ? this._consume(length) : null;
+
+                    this.emit('frame', { type, connectionId, payload });
+                } else {
+                    break;
+                }
             }
+        } catch (err) {
+            this.emit('error', new Error(`Internal decoder error: ${err.message}`));
+            this.chunks = [];
+            this.totalLength = 0;
+        }
+    }
 
-            const totalFrameLength = 9 + length;
+    /**
+     * Internal helper to peek N bytes from the chunk list WITHOUT consuming them.
+     */
+    _peek(n) {
+        if (this.chunks.length === 0) return Buffer.alloc(0);
 
-            if (this.buffer.length >= totalFrameLength) {
-                // We have a complete frame
-                const payload = length > 0 ? this.buffer.subarray(9, totalFrameLength) : null;
+        if (this.chunks[0].length >= n) {
+            return this.chunks[0].subarray(0, n);
+        }
+        
+        // Data spans multiple chunks, need a temporary buffer
+        const buffer = Buffer.allocUnsafe(n);
+        let offset = 0;
+        for (const chunk of this.chunks) {
+            const toCopy = Math.min(chunk.length, n - offset);
+            if (toCopy > 0) {
+                chunk.copy(buffer, offset, 0, toCopy);
+                offset += toCopy;
+            }
+            if (offset === n) break;
+        }
+        return buffer;
+    }
 
-                // Remove frame from buffer using subarray (no copy, just pointer move)
-                // We use a copy periodically or if the offset gets too large to allow GC of old chunks
-                // For simplicity in this implementation, we use subarray and occasional concat cleanup
-                this.buffer = this.buffer.subarray(totalFrameLength);
+    /**
+     * Internal helper to consume (and remove) N bytes from the chunk list.
+     */
+    _consume(n) {
+        if (this.chunks.length === 0 || n === 0) return Buffer.alloc(0);
 
-                this.emit('frame', { type, connectionId, payload: payload ? Buffer.from(payload) : null });
-            } else {
-                break;
+        let result;
+        if (this.chunks[0].length > n) {
+            // Case 1: Subarray of the first chunk
+            result = Buffer.from(this.chunks[0].subarray(0, n));
+            this.chunks[0] = this.chunks[0].subarray(n);
+        } else if (this.chunks[0].length === n) {
+            // Case 2: Exactly the first chunk
+            result = this.chunks.shift();
+        } else {
+            // Case 3: Spans multiple chunks
+            result = Buffer.allocUnsafe(n);
+            let offset = 0;
+            while (offset < n && this.chunks.length > 0) {
+                const chunk = this.chunks[0];
+                const toCopy = Math.min(chunk.length, n - offset);
+                chunk.copy(result, offset, 0, toCopy);
+                offset += toCopy;
+                
+                if (toCopy === chunk.length) {
+                    this.chunks.shift();
+                } else {
+                    this.chunks[0] = chunk.subarray(toCopy);
+                }
             }
         }
-
-        // If buffer is empty, reset to avoid holding onto a large allocated buffer through subarray
-        if (this.buffer.length === 0) {
-            this.buffer = Buffer.alloc(0);
-        }
+        this.totalLength -= n;
+        return result;
     }
 }
 

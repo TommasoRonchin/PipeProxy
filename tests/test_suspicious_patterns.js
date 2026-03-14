@@ -472,6 +472,101 @@ async function main() {
         }
     ];
 
+    // Deterministic mutation-style cases for broader hostile pattern coverage.
+    const mutatedCases = [];
+
+    const badContentLengthValues = [
+        '+0',
+        '+10',
+        '-0',
+        '-10',
+        '1 0',
+        '10  ',
+        '  10',
+        '10\t',
+        '10,0',
+        '0x10',
+        '1e3',
+        'NaN',
+        'infinite',
+        '18446744073709551616x'
+    ];
+
+    for (let i = 0; i < badContentLengthValues.length; i++) {
+        const cl = badContentLengthValues[i];
+        mutatedCases.push({
+            name: `mut-cl-${i}-rejected`,
+            raw: `POST ${reqBase}/mut-cl-${i} HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nContent-Length: ${cl}\r\n\r\nbody`,
+            expectStatus: 400
+        });
+    }
+
+    const badTransferEncodingValues = [
+        ',chunked',
+        'chunked,',
+        'gzip,,chunked',
+        'chunked,,',
+        ',,chunked',
+        'chunked,@evil',
+        'chunked/evil',
+        'chunked ;x=1',
+        ' chunked , ',
+        'gzip, chunked,',
+        'gzip, ,chunked'
+    ];
+
+    for (let i = 0; i < badTransferEncodingValues.length; i++) {
+        const te = badTransferEncodingValues[i];
+        mutatedCases.push({
+            name: `mut-te-${i}-rejected`,
+            raw: `POST ${reqBase}/mut-te-${i} HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nTransfer-Encoding: ${te}\r\n\r\n0\r\n\r\n`,
+            expectStatus: 400
+        });
+    }
+
+    const badHeaderNameVariants = [
+        'X Test',
+        'X(Test)',
+        'X[Test]',
+        'X@Test',
+        'X=Test',
+        'X/Test',
+        'X?Test',
+        'X\\Test',
+        'X\"Test',
+        'X;Test'
+    ];
+
+    for (let i = 0; i < badHeaderNameVariants.length; i++) {
+        const headerName = badHeaderNameVariants[i];
+        mutatedCases.push({
+            name: `mut-header-name-${i}-rejected`,
+            raw: `GET ${reqBase}/mut-header-name-${i} HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\n${headerName}: value\r\n\r\n`,
+            expectStatus: 400
+        });
+    }
+
+    const badRequestLineVariants = [
+        `GET  ${reqBase}/mut-rline-double-space HTTP/1.1`,
+        `GET\t${reqBase}/mut-rline-tab HTTP/1.1`,
+        `GET ${reqBase}/mut-rline-http09 HTTP/0.9`,
+        `GET ${reqBase}/mut-rline-http12 HTTP/1.2`,
+        `GET ${reqBase}/mut-rline-http20 HTTP/2.0`,
+        `GET ${reqBase}/mut-rline-no-version`,
+        `GET ${reqBase}/mut-rline-garbage HTTX/1.1`
+    ];
+
+    for (let i = 0; i < badRequestLineVariants.length; i++) {
+        const requestLine = badRequestLineVariants[i];
+        mutatedCases.push({
+            name: `mut-request-line-${i}-rejected`,
+            raw: `${requestLine}\r\nHost: 127.0.0.1:${TARGET_PORT}\r\n\r\n`,
+            expectStatus: 400
+        });
+    }
+
+    extraCases.push(...mutatedCases);
+
     for (const tc of extraCases) {
         const res = await sendRawProxyRequest(tc.raw);
         const parsed = extractJsonBody(res.body);

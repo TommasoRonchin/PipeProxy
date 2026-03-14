@@ -88,7 +88,8 @@ function parseHeaderFraming(lines) {
         }
 
         const name = rawName.toLowerCase();
-        const value = line.substring(colonIdx + 1).trim();
+        const rawValue = line.substring(colonIdx + 1);
+        const value = rawValue.trim();
 
         if (!name) {
             return { invalid: true, reason: 'Empty header name' };
@@ -104,6 +105,9 @@ function parseHeaderFraming(lines) {
             transferEncoding = value.toLowerCase();
         } else if (name === 'content-length') {
             // Strict parse: only plain non-negative integer accepted.
+            if (STRICT_HTTP_FRAMING && !/^(?: )?\d+$/.test(rawValue)) {
+                return { invalid: true, reason: 'Invalid Content-Length whitespace format' };
+            }
             if (!/^\d+$/.test(value)) {
                 return { invalid: true, reason: 'Invalid Content-Length' };
             }
@@ -307,7 +311,7 @@ const proxyConnectionHandler = (socket) => {
         // Fast path for request line parsing
         const firstLineEnd = headerBuffer.indexOf('\r\n');
         const reqLine = headerBuffer.subarray(0, firstLineEnd).toString('utf8');
-        const match = reqLine.match(/^([A-Z]+)\s+([^\s]+)\s+HTTP\/(1\.[01])$/);
+        const match = reqLine.match(/^([A-Z]+) ([^\s]+) HTTP\/(1\.[01])$/);
         
         if (!match) {
             socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');

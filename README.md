@@ -175,10 +175,10 @@ npm test
 
 ## 🛠️ Advanced Features
 
-- **Backpressure Handling:** The client and server track TCP buffer saturation. If a single destination socket fills beyond the `MAX_SOCKET_BUFFER_MB` (default 1MB) high-watermark, the specific stream is gracefully terminated without affecting the rest of the tunnel to prevent Out-Of-Memory crashes.
+- **Backpressure Handling:** The client and server track TCP buffer saturation. If a single destination socket fills beyond the `MAX_SOCKET_BUFFER_MB` (default 10MB) high-watermark, the specific stream is gracefully terminated without affecting the rest of the tunnel to prevent Out-Of-Memory crashes.
 - **SSRF Protection:** Controlled by the `BLOCK_LOCAL_NETWORK` (default true) setting, the client natively prevents Server-Side Request Forgery by blocking incoming connection requests attempting to reach local IP ranges (`127.0.0.0/8`, `192.168.*`, `10.*`, etc.), protecting your home/corporate network.
-- **Proxy Routing Security:** Plain HTTP proxied requests are forcefully decoupled using `FORCE_CONNECTION_CLOSE` (default true) to inject `Connection: close` headers. This prevents HTTP Keep-Alive proxy smuggling and routing confusion.
-- **OOM Protection (Tunnel):** The built-in frame encoder natively limits frame generation chunk memory limits with `MAX_ENCODE_FRAME_SIZE_MB` (default 50). The built-in frame decoder protects against memory exhaustion attacks by strictly enforcing a `MAX_FRAME_SIZE` (default 10MB) on multiplexed payloads. Flow-control backpressure is also managed using `WS_HIGH_WATER_MARK_MB` (default 10) and `WS_LOW_WATER_MARK_MB` (default 2) which dynamically pause rapid local TCP sockets if the WebSocket tunnel struggles to keep up over slow connections.
+- **Proxy Routing Security (Smart Mode):** Plain HTTP requests use a smart policy by default: keep-alive is preserved for simple safe methods (`GET/HEAD/OPTIONS`) for performance, while risky framing cases are hardened (`Transfer-Encoding`/body framing force close; conflicting TE+CL and invalid framing are rejected with `400`). You can still force global close via `FORCE_CONNECTION_CLOSE=true`.
+- **OOM Protection (Tunnel):** The built-in frame encoder natively limits frame generation chunk memory limits with `MAX_ENCODE_FRAME_SIZE_MB` (default 50). The built-in frame decoder protects against memory exhaustion attacks by strictly enforcing a `MAX_FRAME_SIZE` (default 10MB) on multiplexed payloads. Flow-control backpressure is also managed using `WS_HIGH_WATER_MARK_MB` (default 64) and `WS_LOW_WATER_MARK_MB` (default 16) which dynamically pause rapid local TCP sockets if the WebSocket tunnel struggles to keep up over slow connections.
 - **OOM Protection (Proxy):** The proxy server strictly verifies headers avoiding infinite Slowloris buffer leaks via the `MAX_PROXY_HEADER_SIZE` (default 8KB) and `MAX_PROXY_TIMEOUT_MS` (default 10s) settings. Connections are also dropped if they stay idle for too long without exchanging data, controlled by `IDLE_TIMEOUT_MS` (default 60s). It also limits concurrent proxy connections with `MAX_CONCURRENT_PROXY_CONNECTIONS` (default 500).
 - **Proxy Authentication:** Fully standard `Proxy-Authorization` header parsing implemented natively at the TCP packet level.
 - **Hostname Validation:** The client enforces a `MAX_HOSTNAME_SIZE` (default 2KB) to prevent memory exhaustion from maliciously long target addresses. It also limits the number of targets queuing up for DNS resolution and early-data buffering using `MAX_PENDING_CONNECTIONS` (default 1000).
@@ -279,13 +279,13 @@ You can fine-tune the system behavior by setting these environment variables in 
 - `MAX_CONCURRENT_PROXY_CONNECTIONS=500`: (Server-only) Max simultaneous public proxy clients.
 - `PING_INTERVAL_MS=30000`: Heartbeat interval to detect and drop dead connections.
 - `RECONNECT_DELAY_MS=3000`: (Client-only) Delay before attempting tunnel reconnection.
-- `WS_HIGH_WATER_MARK_MB=10`: (Client-only) Buffer threshold to trigger backpressure throttling.
-- `WS_LOW_WATER_MARK_MB=2`: (Client-only) Threshold to resume data flow after throttling.
+- `WS_HIGH_WATER_MARK_MB=64`: (Client/Server) Buffer threshold to trigger backpressure throttling.
+- `WS_LOW_WATER_MARK_MB=16`: (Client/Server) Threshold to resume data flow after throttling.
 
 #### 🛡️ Memory & OOM Protection
 - `MAX_FRAME_SIZE=10485760`: Max allowed size (10MB) for a single multiplexed frame.
 - `MAX_ENCODE_FRAME_SIZE_MB=50`: Safety limit for encoding outbound frame payloads.
-- `MAX_SOCKET_BUFFER_MB=1`: Individual socket buffer limit before termination.
+- `MAX_SOCKET_BUFFER_MB=10`: Individual socket buffer limit before termination.
 - `MAX_PROXY_HEADER_SIZE=8192`: (Server-only) Max HTTP header size for proxy clients.
 - `MAX_PROXY_TIMEOUT_MS=10000`: (Server-only) Timeout for receiving initial proxy headers.
 - `IDLE_TIMEOUT_MS=60000`: Timeout for connections that stay idle without data.
@@ -293,6 +293,61 @@ You can fine-tune the system behavior by setting these environment variables in 
 - `MAX_PENDING_CONNECTIONS=1000`: (Client-only) Limit for connections waiting for DNS or early-data.
 
 #### 🛠️ Routing Behavior
-- `FORCE_CONNECTION_CLOSE=true`: (Server-only) Injects `Connection: close` to prevent smuggling.
+- `FORCE_CONNECTION_CLOSE=false`: (Server-only) Forces `Connection: close` globally when explicitly enabled.
+- `SMART_HTTP_CLOSE=true`: (Server-only) Smart default policy: keep-alive for simple safe methods, force close or reject invalid/risky HTTP framing.
 - `REWRITE_PROXY_URLS=true`: (Server-only) Normalizes absolute proxy URLs to paths.
 - `IPV4_FALLBACK_TIMEOUT_MS=250`: (Client-only) Wait time (in ms) before falling back from a dead IPv6 route to IPv4 (Happy Eyeballs).
+
+### Recommended Security/Performance Profiles
+
+Use one of these presets depending on your threat model and traffic pattern.
+
+#### 1. `strict-security`
+```env
+FORCE_CONNECTION_CLOSE=true
+SMART_HTTP_CLOSE=true
+ENABLE_PROXY_AUTH=true
+ENABLE_TLS_PROXY=true
+ENABLE_SECURE_HANDSHAKE=true
+ENABLE_ENCRYPTION=true
+```
+
+- Highest isolation for plain HTTP routing.
+- Lower throughput due to forced connection churn on non-CONNECT HTTP.
+
+#### 2. `balanced` (recommended default)
+```env
+FORCE_CONNECTION_CLOSE=false
+SMART_HTTP_CLOSE=true
+ENABLE_PROXY_AUTH=true
+ENABLE_TLS_PROXY=true
+ENABLE_SECURE_HANDSHAKE=true
+ENABLE_ENCRYPTION=true
+```
+
+- Good security/performance trade-off.
+- Preserves keep-alive for simple safe methods while hardening risky framing.
+
+#### 3. `max-throughput`
+```env
+FORCE_CONNECTION_CLOSE=false
+SMART_HTTP_CLOSE=false
+ENABLE_PROXY_AUTH=true
+ENABLE_TLS_PROXY=true
+ENABLE_SECURE_HANDSHAKE=true
+ENABLE_ENCRYPTION=true
+```
+
+- Best raw throughput.
+- Least conservative plain-HTTP routing policy; use only in trusted environments.
+
+### Important Security Note On `SMART_HTTP_CLOSE`
+
+`SMART_HTTP_CLOSE=true` significantly reduces smuggling/desync risk for common proxy abuse patterns (invalid framing, conflicting `Transfer-Encoding`/`Content-Length`, and risky body framing), but it is not a formal guarantee against every parser-desync variant in all upstream stacks.
+
+For internet-facing deployments, treat this as one layer in defense-in-depth and keep these enabled together:
+
+- `ENABLE_PROXY_AUTH=true`
+- `ENABLE_TLS_PROXY=true` (or TLS terminated by a trusted reverse proxy)
+- `ENABLE_SECURE_HANDSHAKE=true`
+- Restrictive network exposure (firewall/IP allowlist where possible)

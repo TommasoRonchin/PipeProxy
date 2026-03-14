@@ -38,7 +38,8 @@ const TLS_KEY_PATH = process.env.TLS_KEY_PATH;
 const MAX_PROXY_HEADER_SIZE = process.env.MAX_PROXY_HEADER_SIZE ? parseInt(process.env.MAX_PROXY_HEADER_SIZE, 10) : 8192;
 const MAX_PROXY_TIMEOUT_MS = process.env.MAX_PROXY_TIMEOUT_MS ? parseInt(process.env.MAX_PROXY_TIMEOUT_MS, 10) : 10000;
 const REWRITE_PROXY_URLS = process.env.REWRITE_PROXY_URLS !== 'false'; // Default true
-const FORCE_CONNECTION_CLOSE = process.env.FORCE_CONNECTION_CLOSE !== 'false'; // Default true
+const FORCE_CONNECTION_CLOSE = process.env.FORCE_CONNECTION_CLOSE === 'true'; // Default false (better throughput, fewer churn stalls)
+const SMART_HTTP_CLOSE = process.env.SMART_HTTP_CLOSE !== 'false'; // Default true: close only risky/plain-HTTP cases
 const MAX_CONCURRENT_PROXY_CONNECTIONS = process.env.MAX_CONCURRENT_PROXY_CONNECTIONS ? parseInt(process.env.MAX_CONCURRENT_PROXY_CONNECTIONS, 10) : 500;
 
 let activeProxyConnections = 0;
@@ -59,6 +60,57 @@ function validateAuth(headerText) {
     const password = credentials.substring(splitIdx + 1);
 
     return timingSafeEqual(username, PROXY_AUTH_USERNAME) && timingSafeEqual(password, PROXY_AUTH_PASSWORD);
+}
+
+function parseHeaderFraming(lines) {
+    let transferEncoding = null;
+    const contentLengthValues = [];
+
+    for (let i = 1; i < lines.length; i++) {
+        const line = lines[i];
+        const colonIdx = line.indexOf(':');
+        if (colonIdx === -1) continue;
+        const name = line.substring(0, colonIdx).trim().toLowerCase();
+        const value = line.substring(colonIdx + 1).trim();
+
+        if (name === 'transfer-encoding') {
+            transferEncoding = value.toLowerCase();
+        } else if (name === 'content-length') {
+            const parsed = parseInt(value, 10);
+            if (!Number.isFinite(parsed) || parsed < 0) {
+                return { invalid: true };
+            }
+            contentLengthValues.push(parsed);
+        }
+    }
+
+    if (contentLengthValues.length > 1) {
+        const first = contentLengthValues[0];
+        for (let i = 1; i < contentLengthValues.length; i++) {
+            if (contentLengthValues[i] !== first) {
+                return { invalid: true };
+            }
+        }
+    }
+
+    return {
+        invalid: false,
+        transferEncoding,
+        contentLength: contentLengthValues.length > 0 ? contentLengthValues[0] : null
+    };
+}
+
+function shouldForceCloseForHttp({ method, framing, extraDataLength }) {
+    if (FORCE_CONNECTION_CLOSE) return true;
+    if (!SMART_HTTP_CLOSE) return false;
+
+    // Always close on framed bodies to reduce parser-desync/smuggling surface.
+    if (framing.transferEncoding) return true;
+    if (framing.contentLength && framing.contentLength > 0) return true;
+
+    // Keep-alive only for simple safe methods.
+    const safeMethods = new Set(['GET', 'HEAD', 'OPTIONS']);
+    return !safeMethods.has(method);
 }
 
 
@@ -231,6 +283,25 @@ const proxyConnectionHandler = (socket) => {
         } else {
             // Forward HTTP request, filter hop-by-hop headers
             const lines = headerText.split('\r\n');
+
+            const framing = parseHeaderFraming(lines);
+            if (framing.invalid) {
+                socket.end('HTTP/1.1 400 Bad Request\r\n\r\nInvalid HTTP framing\n');
+                setImmediate(() => socket.destroy());
+                return;
+            }
+
+            if (framing.transferEncoding && framing.contentLength !== null) {
+                socket.end('HTTP/1.1 400 Bad Request\r\n\r\nConflicting Transfer-Encoding/Content-Length\n');
+                setImmediate(() => socket.destroy());
+                return;
+            }
+
+            const forceCloseThisRequest = shouldForceCloseForHttp({
+                method,
+                framing,
+                extraDataLength: extraData.length
+            });
             
             // Rewrite first line if needed
             if (REWRITE_PROXY_URLS) {
@@ -250,7 +321,7 @@ const proxyConnectionHandler = (socket) => {
                 return !hopByHopHeaders.includes(name);
             });
 
-            const safeHeader = filteredLines.join('\r\n') + (FORCE_CONNECTION_CLOSE ? '\r\nConnection: close\r\n\r\n' : '\r\n\r\n');
+            const safeHeader = filteredLines.join('\r\n') + (forceCloseThisRequest ? '\r\nConnection: close\r\n\r\n' : '\r\n\r\n');
             const packet = Buffer.concat([Buffer.from(safeHeader, 'utf8'), extraData]);
             tunnelServer.sendFrame(TYPES.DATA, connId, packet);
         }

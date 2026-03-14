@@ -228,6 +228,8 @@ class ConnectionManager {
         };
 
         const socket = net.connect(socketOptions, () => {
+            socket.setNoDelay(true);
+            socket.setKeepAlive(true, 15000);
             this.sendFrame(TYPES.OPEN_ACK, connectionId);
         });
 

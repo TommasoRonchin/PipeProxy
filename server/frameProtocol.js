@@ -104,6 +104,7 @@ class FrameProtocol extends EventEmitter {
         } while (this.connections.has(connectionId));
 
         this.connections.set(connectionId, socket);
+        socket.setNoDelay(true);
 
         // Initial OPEN frame payload contains the destination (host:port)
         const targetPayload = Buffer.from(`${host}:${port}`, 'utf8');

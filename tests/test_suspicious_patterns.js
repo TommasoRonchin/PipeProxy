@@ -52,6 +52,23 @@ function sendRawProxyRequest(rawRequest, timeoutMs = 6000) {
     });
 }
 
+async function waitForTunnelReady(reqBase, timeoutMs = 12000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+        try {
+            const res = await sendRawProxyRequest(
+                `GET ${reqBase}/warmup HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\n\r\n`,
+                2500
+            );
+            if (res.statusCode === 200) return true;
+        } catch {
+            // keep retrying until timeout
+        }
+        await delay(250);
+    }
+    return false;
+}
+
 async function main() {
     const targetServer = http.createServer((req, res) => {
         const bodyChunks = [];
@@ -92,8 +109,6 @@ async function main() {
     proxyProc.stderr.on('data', (d) => process.stderr.write(`[PROXY ERR] ${d.toString()}`));
     clientProc.stderr.on('data', (d) => process.stderr.write(`[CLIENT ERR] ${d.toString()}`));
 
-    await delay(2200);
-
     let passed = 0;
     let failed = 0;
 
@@ -110,6 +125,16 @@ async function main() {
     console.log('=== Suspicious Pattern Recognition Suite ===');
 
     const reqBase = `http://127.0.0.1:${TARGET_PORT}`;
+
+    const ready = await waitForTunnelReady(reqBase);
+    if (!ready) {
+        console.error('Tunnel readiness check failed before running suspicious-pattern suite.');
+        if (!proxyProc.killed) proxyProc.kill('SIGKILL');
+        if (!clientProc.killed) clientProc.kill('SIGKILL');
+        await delay(300);
+        await new Promise((resolve) => targetServer.close(resolve));
+        process.exit(1);
+    }
 
     const r1 = await sendRawProxyRequest(
         `GET ${reqBase}/safe HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\n\r\n`
@@ -199,6 +224,136 @@ async function main() {
         `GET ${reqBase}/pipeline-safe HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\n\r\nGET ${reqBase}/pipeline-safe-2 HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\n\r\n`
     );
     assert(r17.raw.includes('/pipeline-safe') && r17.raw.includes('/pipeline-safe-2'), 'http-pipelining-still-works', r17.statusLine);
+
+    const extraCases = [
+        {
+            name: 'duplicate-host-same-value-accepted',
+            raw: `GET ${reqBase}/dup-host-same HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nHost: 127.0.0.1:${TARGET_PORT}\r\n\r\n`,
+            expectStatus: 200
+        },
+        {
+            name: 'duplicate-te-header-rejected',
+            raw: `POST ${reqBase}/dup-te HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nTransfer-Encoding: gzip\r\nTransfer-Encoding: chunked\r\n\r\n`,
+            expectStatus: 400
+        },
+        {
+            name: 'repeated-chunked-token-rejected',
+            raw: `POST ${reqBase}/repeat-chunked HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nTransfer-Encoding: chunked, chunked\r\n\r\n`,
+            expectStatus: 400
+        },
+        {
+            name: 'invalid-te-token-rejected',
+            raw: `POST ${reqBase}/invalid-te-token HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nTransfer-Encoding: chunked,@bad\r\n\r\n`,
+            expectStatus: 400
+        },
+        {
+            name: 'uppercase-chunked-accepted',
+            raw: `POST ${reqBase}/uppercase-chunked HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nTransfer-Encoding: CHUNKED\r\n\r\n5\r\nHello\r\n0\r\n\r\n`,
+            expectStatus: 200,
+            bodyIncludes: 'Hello'
+        },
+        {
+            name: 'chunked-with-extension-accepted',
+            raw: `POST ${reqBase}/chunk-ext HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nTransfer-Encoding: chunked\r\n\r\n4;foo=bar\r\nWiki\r\n0\r\n\r\n`,
+            expectStatus: 200,
+            bodyIncludes: 'Wiki'
+        },
+        {
+            name: 'cl-plus-prefix-rejected',
+            raw: `POST ${reqBase}/cl-plus HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nContent-Length: +5\r\n\r\nhello`,
+            expectStatus: 400
+        },
+        {
+            name: 'cl-negative-rejected',
+            raw: `POST ${reqBase}/cl-negative HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nContent-Length: -1\r\n\r\n`,
+            expectStatus: 400
+        },
+        {
+            name: 'cl-leading-zeros-accepted',
+            raw: `POST ${reqBase}/cl-leading-zeros HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nContent-Length: 0004\r\n\r\ntest`,
+            expectStatus: 200,
+            bodyIncludes: 'test'
+        },
+        {
+            name: 'request-line-lowercase-method-rejected',
+            raw: `get ${reqBase}/lowercase HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\n\r\n`,
+            expectStatus: 400
+        },
+        {
+            name: 'request-line-missing-http-version-rejected',
+            raw: `GET ${reqBase}/missing-version\r\nHost: 127.0.0.1:${TARGET_PORT}\r\n\r\n`,
+            expectStatus: 400
+        },
+        {
+            name: 'invalid-absolute-url-rejected',
+            raw: `GET http://:bad HTTP/1.1\r\nHost: example.com\r\n\r\n`,
+            expectStatus: 400
+        },
+        {
+            name: 'head-kept-alive',
+            raw: `HEAD ${reqBase}/head-safe HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\n\r\n`,
+            expectStatus: 200
+        },
+        {
+            name: 'options-kept-alive',
+            raw: `OPTIONS ${reqBase}/opt-safe HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\n\r\n`,
+            expectStatus: 200,
+            expectConnectionNotClose: true
+        },
+        {
+            name: 'put-forced-close',
+            raw: `PUT ${reqBase}/put-close HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nContent-Length: 4\r\n\r\nbody`,
+            expectStatus: 200,
+            expectConnectionClose: true
+        },
+        {
+            name: 'delete-forced-close',
+            raw: `DELETE ${reqBase}/delete-close HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\n\r\n`,
+            expectStatus: 200,
+            expectConnectionClose: true
+        },
+        {
+            name: 'connection-te-token-case-insensitive-close',
+            raw: `GET ${reqBase}/connection-te-case HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nConnection: Keep-Alive, Te\r\n\r\n`,
+            expectStatus: 200,
+            expectConnectionClose: true
+        },
+        {
+            name: 'tabs-inside-header-name-rejected',
+            raw: `GET ${reqBase}/tab-header-name HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nBad\tHeader: x\r\n\r\n`,
+            expectStatus: 400
+        },
+        {
+            name: 'invalid-cl-with-spaces-rejected',
+            raw: `POST ${reqBase}/cl-space HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nContent-Length: 1 2\r\n\r\n`,
+            expectStatus: 400
+        },
+        {
+            name: 'te-cl0-still-rejected',
+            raw: `POST ${reqBase}/te-cl0 HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nTransfer-Encoding: chunked\r\nContent-Length: 0\r\n\r\n0\r\n\r\n`,
+            expectStatus: 400
+        }
+    ];
+
+    for (const tc of extraCases) {
+        const res = await sendRawProxyRequest(tc.raw);
+        const parsed = extractJsonBody(res.body);
+        let ok = res.statusCode === tc.expectStatus;
+
+        if (ok && tc.bodyIncludes) {
+            ok = !!(parsed && parsed.body && parsed.body.includes(tc.bodyIncludes));
+        }
+
+        if (ok && tc.expectConnectionClose) {
+            ok = !!(parsed && parsed.headers && parsed.headers.connection === 'close');
+        }
+
+        if (ok && tc.expectConnectionNotClose) {
+            ok = !!(parsed && parsed.headers && parsed.headers.connection !== 'close');
+        }
+
+        assert(ok, tc.name, res.statusLine);
+    }
 
     console.log('==========================================');
     console.log(`Suspicious-pattern tests passed: ${passed}`);

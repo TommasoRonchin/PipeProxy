@@ -66,6 +66,7 @@ function validateAuth(headerText) {
 function parseHeaderFraming(lines) {
     let transferEncoding = null;
     let transferEncodingSeen = false;
+    let transferEncodingCount = 0;
     let hasConnectionTEHint = false;
     const hostValues = [];
     const contentLengthValues = [];
@@ -89,6 +90,7 @@ function parseHeaderFraming(lines) {
 
         if (name === 'transfer-encoding') {
             transferEncodingSeen = true;
+            transferEncodingCount++;
             transferEncoding = value.toLowerCase();
         } else if (name === 'content-length') {
             // Strict parse: only plain non-negative integer accepted.
@@ -132,6 +134,10 @@ function parseHeaderFraming(lines) {
     let chunkedIsFinal = false;
     let transferEncodings = [];
     if (transferEncodingSeen) {
+        if (STRICT_HTTP_FRAMING && transferEncodingCount > 1) {
+            return { invalid: true, reason: 'Duplicate Transfer-Encoding headers' };
+        }
+
         if (!transferEncoding || transferEncoding.trim() === '') {
             return { invalid: true, reason: 'Empty Transfer-Encoding' };
         }
@@ -143,6 +149,18 @@ function parseHeaderFraming(lines) {
 
         hasChunked = transferEncodings.includes('chunked');
         chunkedIsFinal = transferEncodings[transferEncodings.length - 1] === 'chunked';
+
+        const teTokenPattern = /^[!#$%&'*+.^_`|~0-9a-z-]+$/;
+        for (const teToken of transferEncodings) {
+            if (!teTokenPattern.test(teToken)) {
+                return { invalid: true, reason: 'Invalid Transfer-Encoding token' };
+            }
+        }
+
+        const chunkedCount = transferEncodings.filter((t) => t === 'chunked').length;
+        if (STRICT_HTTP_FRAMING && chunkedCount > 1) {
+            return { invalid: true, reason: 'Repeated chunked Transfer-Encoding' };
+        }
 
         // In strict mode, reject non-chunked TE requests and non-final chunked.
         if (STRICT_HTTP_FRAMING) {

@@ -165,13 +165,13 @@ curl -U admin:securepassword123 -x http://YOUR_VPS_IP:3128 https://api.ipify.org
 
 PipeProxy comes with a gigantic comprehensive test suite that validates 31+ ultra-extreme scenarios including security exploits, load testing, and protocol integrity.
 
-**Run All Tests:**
+**Run All Tests (including the suspicious/pattern hardening suite):**
 ```bash
 npm test
 ```
 *Note: The tests will automatically spawn dummy backends and temporary server/client instances on high ports.*
 
-**Run Suspicious HTTP Pattern Suite (Smuggling/Framing):**
+**Run Only the Suspicious HTTP Pattern Suite (Smuggling/Framing):**
 ```bash
 npm run test:suspicious
 ```

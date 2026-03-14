@@ -332,22 +332,24 @@ You can fine-tune every aspect of PipeProxy by setting these environment variabl
 
 ### Recommended Security/Performance Profiles
 
-Use one of these presets depending on your threat model and traffic pattern.
+Use one of these presets depending on your threat model and hardware constraints.
 
-#### 1. `strict-security`
+#### 1. `strict-security` (Highest Isolation)
 ```env
 FORCE_CONNECTION_CLOSE=true
 SMART_HTTP_CLOSE=true
+STRICT_HTTP_FRAMING=true
 ENABLE_PROXY_AUTH=true
 ENABLE_TLS_PROXY=true
 ENABLE_SECURE_HANDSHAKE=true
 ENABLE_ENCRYPTION=true
+STRICT_SEQUENCE_CHECK=true
+BLOCK_LOCAL_NETWORK=true
 ```
+- **Use Case**: Public internet proxy with zero-trust requirements.
+- **Trade-off**: Higher CPU usage and connection overhead.
 
-- Highest isolation for plain HTTP routing.
-- Lower throughput due to forced connection churn on non-CONNECT HTTP.
-
-#### 2. `balanced` (recommended default)
+#### 2. `balanced` (Recommended Default)
 ```env
 FORCE_CONNECTION_CLOSE=false
 SMART_HTTP_CLOSE=true
@@ -355,23 +357,37 @@ ENABLE_PROXY_AUTH=true
 ENABLE_TLS_PROXY=true
 ENABLE_SECURE_HANDSHAKE=true
 ENABLE_ENCRYPTION=true
+STRICT_SEQUENCE_CHECK=true
+BLOCK_LOCAL_NETWORK=true
 ```
+- **Use Case**: Standard usage on VPS/Home network.
+- **Trade-off**: Balance between security hardening and high throughput.
 
-- Good security/performance trade-off.
-- Preserves keep-alive for simple safe methods while hardening risky framing.
+#### 3. `low-resource-iot` (RPi Zero / Limited RAM)
+```env
+WS_HIGH_WATER_MARK_MB=16
+WS_LOW_WATER_MARK_MB=4
+MAX_SOCKET_BUFFER_MB=2
+MAX_CONNECTIONS=500
+MAX_PENDING_CONNECTIONS=100
+MAX_ENCODE_FRAME_SIZE_MB=10
+MAX_CLIENT_QUEUE_MB=20
+```
+- **Use Case**: Running on low-end hardware or unstable slow connections.
+- **Trade-off**: Lower concurrency but prevents OOM crashes.
 
-#### 3. `max-throughput`
+#### 4. `max-throughput` (Trusted/Local LAN)
 ```env
 FORCE_CONNECTION_CLOSE=false
 SMART_HTTP_CLOSE=false
+STRICT_HTTP_FRAMING=false
 ENABLE_PROXY_AUTH=true
-ENABLE_TLS_PROXY=true
+ENABLE_ENCRYPTION=false
 ENABLE_SECURE_HANDSHAKE=true
-ENABLE_ENCRYPTION=true
+BLOCK_LOCAL_NETWORK=false
 ```
-
-- Best raw throughput.
-- Least conservative plain-HTTP routing policy; use only in trusted environments.
+- **Use Case**: Secure local networks or when using WSS/VPN for transport security.
+- **Trade-off**: Native encryption disabled for raw speed; relies on transport layer security.
 
 ### Important Security Note On `SMART_HTTP_CLOSE`
 

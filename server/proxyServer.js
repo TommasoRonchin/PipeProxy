@@ -70,6 +70,7 @@ function parseHeaderFraming(lines) {
     let hasConnectionTEHint = false;
     const hostValues = [];
     const contentLengthValues = [];
+    const headerNameTokenPattern = /^[!#$%&'*+.^_`|~0-9a-z-]+$/;
 
     for (let i = 1; i < lines.length; i++) {
         const line = lines[i];
@@ -81,11 +82,20 @@ function parseHeaderFraming(lines) {
             continue;
         }
 
-        const name = line.substring(0, colonIdx).trim().toLowerCase();
+        const rawName = line.substring(0, colonIdx);
+        if (rawName !== rawName.trim()) {
+            return { invalid: true, reason: 'Invalid whitespace in header name' };
+        }
+
+        const name = rawName.toLowerCase();
         const value = line.substring(colonIdx + 1).trim();
 
         if (!name) {
             return { invalid: true, reason: 'Empty header name' };
+        }
+
+        if (!headerNameTokenPattern.test(name)) {
+            return { invalid: true, reason: 'Invalid header name characters' };
         }
 
         if (name === 'transfer-encoding') {
@@ -110,6 +120,9 @@ function parseHeaderFraming(lines) {
     }
 
     if (hostValues.length > 1) {
+        if (STRICT_HTTP_FRAMING) {
+            return { invalid: true, reason: 'Duplicate Host headers' };
+        }
         const firstHost = hostValues[0];
         for (let i = 1; i < hostValues.length; i++) {
             if (hostValues[i] !== firstHost) {
@@ -142,7 +155,12 @@ function parseHeaderFraming(lines) {
             return { invalid: true, reason: 'Empty Transfer-Encoding' };
         }
 
-        transferEncodings = transferEncoding.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean);
+        const rawTransferEncodingParts = transferEncoding.split(',').map((t) => t.trim().toLowerCase());
+        if (STRICT_HTTP_FRAMING && rawTransferEncodingParts.some((t) => t === '')) {
+            return { invalid: true, reason: 'Invalid empty Transfer-Encoding token' };
+        }
+
+        transferEncodings = rawTransferEncodingParts.filter(Boolean);
         if (transferEncodings.length === 0) {
             return { invalid: true, reason: 'Empty Transfer-Encoding' };
         }
@@ -289,7 +307,7 @@ const proxyConnectionHandler = (socket) => {
         // Fast path for request line parsing
         const firstLineEnd = headerBuffer.indexOf('\r\n');
         const reqLine = headerBuffer.subarray(0, firstLineEnd).toString('utf8');
-        const match = reqLine.match(/^([A-Z]+)\s+([^\s]+)\s+HTTP/);
+        const match = reqLine.match(/^([A-Z]+)\s+([^\s]+)\s+HTTP\/(1\.[01])$/);
         
         if (!match) {
             socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
@@ -314,6 +332,11 @@ const proxyConnectionHandler = (socket) => {
         } else {
             try {
                 const urlObj = new URL(target);
+                if (urlObj.username || urlObj.password) {
+                    socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
+                    setImmediate(() => socket.destroy());
+                    return;
+                }
                 host = urlObj.hostname;
                 port = urlObj.port ? parseInt(urlObj.port, 10) : 80;
             } catch {

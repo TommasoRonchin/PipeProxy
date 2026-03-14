@@ -227,9 +227,9 @@ async function main() {
 
     const extraCases = [
         {
-            name: 'duplicate-host-same-value-accepted',
+            name: 'duplicate-host-same-value-rejected-in-strict-mode',
             raw: `GET ${reqBase}/dup-host-same HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nHost: 127.0.0.1:${TARGET_PORT}\r\n\r\n`,
-            expectStatus: 200
+            expectStatus: 400
         },
         {
             name: 'duplicate-te-header-rejected',
@@ -331,6 +331,143 @@ async function main() {
         {
             name: 'te-cl0-still-rejected',
             raw: `POST ${reqBase}/te-cl0 HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nTransfer-Encoding: chunked\r\nContent-Length: 0\r\n\r\n0\r\n\r\n`,
+            expectStatus: 400
+        },
+        {
+            name: 'host-with-whitespace-before-colon-rejected',
+            raw: `GET ${reqBase}/host-ws-colon HTTP/1.1\r\nHost : 127.0.0.1:${TARGET_PORT}\r\n\r\n`,
+            expectStatus: 400
+        },
+        {
+            name: 'header-name-leading-space-rejected',
+            raw: `GET ${reqBase}/header-leading-space HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\n X-Test: value\r\n\r\n`,
+            expectStatus: 400
+        },
+        {
+            name: 'header-name-trailing-space-rejected',
+            raw: `GET ${reqBase}/header-trailing-space HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nX-Test : value\r\n\r\n`,
+            expectStatus: 400
+        },
+        {
+            name: 'header-name-parentheses-rejected',
+            raw: `GET ${reqBase}/header-paren HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nX(Test): value\r\n\r\n`,
+            expectStatus: 400
+        },
+        {
+            name: 'http-2-request-line-rejected',
+            raw: `GET ${reqBase}/http2-line HTTP/2.0\r\nHost: 127.0.0.1:${TARGET_PORT}\r\n\r\n`,
+            expectStatus: 400
+        },
+        {
+            name: 'http-version-missing-minor-rejected',
+            raw: `GET ${reqBase}/http-major-only HTTP/1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\n\r\n`,
+            expectStatus: 400
+        },
+        {
+            name: 'url-userinfo-rejected',
+            raw: `GET http://user:pass@127.0.0.1:${TARGET_PORT}/userinfo HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\n\r\n`,
+            expectStatus: 400
+        },
+        {
+            name: 'url-user-only-info-rejected',
+            raw: `GET http://user@127.0.0.1:${TARGET_PORT}/userinfo2 HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\n\r\n`,
+            expectStatus: 400
+        },
+        {
+            name: 'te-whitespace-only-rejected',
+            raw: `POST ${reqBase}/te-space-only HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nTransfer-Encoding:     \r\n\r\n`,
+            expectStatus: 400
+        },
+        {
+            name: 'te-leading-comma-rejected',
+            raw: `POST ${reqBase}/te-leading-comma HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nTransfer-Encoding: ,chunked\r\n\r\n0\r\n\r\n`,
+            expectStatus: 400
+        },
+        {
+            name: 'te-trailing-comma-rejected',
+            raw: `POST ${reqBase}/te-trailing-comma HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nTransfer-Encoding: chunked,\r\n\r\n0\r\n\r\n`,
+            expectStatus: 400
+        },
+        {
+            name: 'te-empty-middle-token-rejected',
+            raw: `POST ${reqBase}/te-empty-mid HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nTransfer-Encoding: gzip,,chunked\r\n\r\n0\r\n\r\n`,
+            expectStatus: 400
+        },
+        {
+            name: 'te-token-with-slash-rejected',
+            raw: `POST ${reqBase}/te-token-slash HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nTransfer-Encoding: chunked/bad\r\n\r\n`,
+            expectStatus: 400
+        },
+        {
+            name: 'te-with-tab-between-tokens-accepted',
+            raw: `POST ${reqBase}/te-tab-between HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nTransfer-Encoding: gzip,\tchunked\r\n\r\n0\r\n\r\n`,
+            expectStatus: 200
+        },
+        {
+            name: 'post-with-cl-zero-kept-close-policy-safe',
+            raw: `POST ${reqBase}/post-cl-zero HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nContent-Length: 0\r\n\r\n`,
+            expectStatus: 200,
+            expectConnectionClose: true
+        },
+        {
+            name: 'patch-method-forced-close',
+            raw: `PATCH ${reqBase}/patch-close HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nContent-Length: 4\r\n\r\nbody`,
+            expectStatus: 200,
+            expectConnectionClose: true
+        },
+        {
+            name: 'trace-method-forced-close',
+            raw: `TRACE ${reqBase}/trace-close HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\n\r\n`,
+            expectStatus: 200,
+            expectConnectionClose: true
+        },
+        {
+            name: 'safe-head-not-closed',
+            raw: `HEAD ${reqBase}/head-not-close HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\n\r\n`,
+            expectStatus: 200
+        },
+        {
+            name: 'safe-options-not-closed',
+            raw: `OPTIONS ${reqBase}/options-not-close HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\n\r\n`,
+            expectStatus: 200,
+            expectConnectionNotClose: true
+        },
+        {
+            name: 'connection-te-alone-forces-close',
+            raw: `GET ${reqBase}/connection-te-alone HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nConnection: TE\r\n\r\n`,
+            expectStatus: 200,
+            expectConnectionClose: true
+        },
+        {
+            name: 'connection-transfer-encoding-token-forces-close',
+            raw: `GET ${reqBase}/connection-transfer-encoding HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nConnection: transfer-encoding\r\n\r\n`,
+            expectStatus: 200,
+            expectConnectionClose: true
+        },
+        {
+            name: 'duplicate-host-case-variant-rejected',
+            raw: `GET ${reqBase}/dup-host-case HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nhost: 127.0.0.1:${TARGET_PORT}\r\n\r\n`,
+            expectStatus: 400
+        },
+        {
+            name: 'duplicate-host-conflict-rejected',
+            raw: `GET ${reqBase}/dup-host-conflict-2 HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nHost: 127.0.0.1:9\r\n\r\n`,
+            expectStatus: 400
+        },
+        {
+            name: 'content-length-zero-on-get-keepalive',
+            raw: `GET ${reqBase}/get-cl0 HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nContent-Length: 0\r\n\r\n`,
+            expectStatus: 200,
+            expectConnectionNotClose: true
+        },
+        {
+            name: 'invalid-method-with-dash-rejected',
+            raw: `GE-T ${reqBase}/bad-method HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\n\r\n`,
+            expectStatus: 400
+        },
+        {
+            name: 'invalid-request-target-whitespace-rejected',
+            raw: `GET http://127.0.0.1:${TARGET_PORT}/bad target HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\n\r\n`,
             expectStatus: 400
         }
     ];

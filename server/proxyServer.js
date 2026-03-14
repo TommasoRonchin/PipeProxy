@@ -42,6 +42,9 @@ const FORCE_CONNECTION_CLOSE = process.env.FORCE_CONNECTION_CLOSE === 'true'; //
 const SMART_HTTP_CLOSE = process.env.SMART_HTTP_CLOSE !== 'false'; // Default true: close only risky/plain-HTTP cases
 const STRICT_HTTP_FRAMING = process.env.STRICT_HTTP_FRAMING !== 'false'; // Default true: reject suspicious/ambiguous framing patterns
 const MAX_CONCURRENT_PROXY_CONNECTIONS = process.env.MAX_CONCURRENT_PROXY_CONNECTIONS ? parseInt(process.env.MAX_CONCURRENT_PROXY_CONNECTIONS, 10) : 500;
+const REQUEST_LINE_REGEX = /^([A-Z]+) ([^\s]+) HTTP\/(1\.[01])$/;
+const SAFE_HTTP_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+const HOP_BY_HOP_HEADERS = new Set(['proxy-authorization', 'proxy-connection', 'connection', 'keep-alive', 'upgrade', 'te', 'trailer']);
 
 let activeProxyConnections = 0;
 
@@ -221,8 +224,7 @@ function shouldForceCloseForHttp({ method, framing, extraDataLength }) {
     if (framing.hasConnectionTEHint) return true;
 
     // Keep-alive only for simple safe methods.
-    const safeMethods = new Set(['GET', 'HEAD', 'OPTIONS']);
-    return !safeMethods.has(method);
+    return !SAFE_HTTP_METHODS.has(method);
 }
 
 
@@ -311,7 +313,7 @@ const proxyConnectionHandler = (socket) => {
         // Fast path for request line parsing
         const firstLineEnd = headerBuffer.indexOf('\r\n');
         const reqLine = headerBuffer.subarray(0, firstLineEnd).toString('utf8');
-        const match = reqLine.match(/^([A-Z]+) ([^\s]+) HTTP\/(1\.[01])$/);
+        const match = REQUEST_LINE_REGEX.exec(reqLine);
         
         if (!match) {
             socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
@@ -430,13 +432,12 @@ const proxyConnectionHandler = (socket) => {
                 } catch {}
             }
 
-            const hopByHopHeaders = ['proxy-authorization', 'proxy-connection', 'connection', 'keep-alive', 'upgrade', 'te', 'trailer'];
             const filteredLines = lines.filter((line, idx) => {
                 if (idx === 0) return true;
                 const colonIdx = line.indexOf(':');
                 if (colonIdx === -1) return false;
                 const name = line.substring(0, colonIdx).trim().toLowerCase();
-                return !hopByHopHeaders.includes(name);
+                return !HOP_BY_HOP_HEADERS.has(name);
             });
 
             const safeHeader = filteredLines.join('\r\n') + (forceCloseThisRequest ? '\r\nConnection: close\r\n\r\n' : '\r\n\r\n');

@@ -22,6 +22,7 @@ class FrameProtocol extends EventEmitter {
 
         // Backpressure monitor for paused sockets; keep frequency moderate to reduce CPU churn.
         this.drainInterval = null;
+        this.pausedSockets = new Set();
         this.startDrainMonitor();
 
         // Listen to incoming frames from the tunnel
@@ -116,15 +117,16 @@ class FrameProtocol extends EventEmitter {
             
             // Backpressure: If tunnel is full, pause THIS socket
             if (this.tunnelServer.getBufferedAmount() > this.wsHighWaterMark) {
-                if (!socket._isPausedByBackpressure) {
+                if (!this.pausedSockets.has(socket)) {
                     socket.pause();
-                    socket._isPausedByBackpressure = true;
+                    this.pausedSockets.add(socket);
                 }
             }
         });
 
         // Cleanup local socket
         const cleanup = () => {
+            this.pausedSockets.delete(socket);
             if (this.connections.has(connectionId)) {
                 this.tunnelServer.sendFrame(TYPES.CLOSE, connectionId);
                 this.connections.delete(connectionId);
@@ -140,12 +142,12 @@ class FrameProtocol extends EventEmitter {
 
     checkDrain() {
         if (this.tunnelServer.isReady() && this.tunnelServer.getBufferedAmount() <= this.wsLowWaterMark) {
-            for (const [connId, socket] of this.connections) {
-                if (socket._isPausedByBackpressure) {
-                    socket._isPausedByBackpressure = false;
+            for (const socket of this.pausedSockets) {
+                if (!socket.destroyed) {
                     socket.resume();
                 }
             }
+            this.pausedSockets.clear();
         }
     }
 
@@ -161,6 +163,7 @@ class FrameProtocol extends EventEmitter {
             socket.destroy();
         }
         this.connections.clear();
+        this.pausedSockets.clear();
     }
 }
 

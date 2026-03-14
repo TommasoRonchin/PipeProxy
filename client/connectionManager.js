@@ -36,8 +36,10 @@ class ConnectionManager {
         this.maxQueueBytes = isNaN(envMaxQueue) ? (128 * 1024 * 1024) : (envMaxQueue * 1024 * 1024);
         this.outboundQueue = [];
         this.outboundQueueBytes = 0;
+        this.outboundQueueHead = 0;
         this.isFlushingQueue = false;
         this.flushRetryTimer = null;
+        this.pausedSockets = new Set();
 
         // Backpressure monitor loops - Faster drain check
         this.drainInterval = setInterval(() => this.checkDrain(), 25);
@@ -246,13 +248,14 @@ class ConnectionManager {
 
         socket.on('data', (data) => {
             this.sendFrame(TYPES.DATA, connectionId, data);
-            if (this.ws.bufferedAmount > this.wsHighWaterMark && !socket._isPausedByBackpressure) {
+            if (this.ws.bufferedAmount > this.wsHighWaterMark && !this.pausedSockets.has(socket)) {
                 socket.pause();
-                socket._isPausedByBackpressure = true;
+                this.pausedSockets.add(socket);
             }
         });
 
         const cleanup = () => {
+            this.pausedSockets.delete(socket);
             if (this.connections.has(connectionId)) {
                 this.sendFrame(TYPES.CLOSE, connectionId);
                 this.connections.delete(connectionId);
@@ -274,18 +277,19 @@ class ConnectionManager {
             socket.destroy();
         }
         this.connections.clear();
+        this.pausedSockets.clear();
     }
 
     checkDrain() {
         if (this.ws && this.ws.readyState === 1 && this.ws.bufferedAmount <= this.wsLowWaterMark) {
-            for (const [connId, socket] of this.connections) {
-                if (socket._isPausedByBackpressure) {
-                    socket._isPausedByBackpressure = false;
+            for (const socket of this.pausedSockets) {
+                if (!socket.destroyed) {
                     socket.resume();
                 }
             }
+            this.pausedSockets.clear();
 
-            if (this.outboundQueue.length > 0) {
+            if (this.outboundQueueHead < this.outboundQueue.length) {
                 this.flushOutboundQueue();
             }
         }
@@ -294,7 +298,7 @@ class ConnectionManager {
     flushOutboundQueue() {
         if (this.isFlushingQueue) return;
         if (!this.ws || this.ws.readyState !== 1) return;
-        if (this.outboundQueue.length === 0) return;
+        if (this.outboundQueueHead >= this.outboundQueue.length) return;
 
         if (this.ws.bufferedAmount > this.wsHighWaterMark) {
             if (!this.flushRetryTimer) {
@@ -307,7 +311,7 @@ class ConnectionManager {
         }
 
         this.isFlushingQueue = true;
-        const chunk = this.outboundQueue.shift();
+        const chunk = this.outboundQueue[this.outboundQueueHead++];
 
         try {
             this.ws.send(chunk, { binary: true }, (err) => {
@@ -323,7 +327,9 @@ class ConnectionManager {
                 return;
             }
 
-            if (this.outboundQueue.length > 0) {
+            this.compactOutboundQueueIfNeeded();
+
+            if (this.outboundQueueHead < this.outboundQueue.length) {
                 setImmediate(() => this.flushOutboundQueue());
             }
             });
@@ -338,9 +344,18 @@ class ConnectionManager {
         }
     }
 
+    compactOutboundQueueIfNeeded() {
+        if (this.outboundQueueHead === 0) return;
+        if (this.outboundQueueHead < 1024 && this.outboundQueueHead * 2 < this.outboundQueue.length) return;
+
+        this.outboundQueue = this.outboundQueue.slice(this.outboundQueueHead);
+        this.outboundQueueHead = 0;
+    }
+
     resetOutboundQueue() {
         this.outboundQueue = [];
         this.outboundQueueBytes = 0;
+        this.outboundQueueHead = 0;
         this.isFlushingQueue = false;
         if (this.flushRetryTimer) {
             clearTimeout(this.flushRetryTimer);

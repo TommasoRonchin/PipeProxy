@@ -29,6 +29,7 @@ class TunnelServer extends EventEmitter {
 
         this.outboundQueue = [];
         this.outboundQueueBytes = 0;
+        this.outboundQueueHead = 0;
         this.isFlushingQueue = false;
         this.flushRetryTimer = null;
 
@@ -298,7 +299,7 @@ class TunnelServer extends EventEmitter {
     flushOutboundQueue() {
         if (this.isFlushingQueue) return;
         if (!this.activeWs || this.activeWs.readyState !== 1) return;
-        if (this.outboundQueue.length === 0) return;
+        if (this.outboundQueueHead >= this.outboundQueue.length) return;
 
         if (this.activeWs.bufferedAmount > this.wsHighWaterMark) {
             if (!this.flushRetryTimer) {
@@ -311,7 +312,7 @@ class TunnelServer extends EventEmitter {
         }
 
         this.isFlushingQueue = true;
-        const chunk = this.outboundQueue.shift();
+        const chunk = this.outboundQueue[this.outboundQueueHead++];
 
         try {
             this.activeWs.send(chunk, { binary: true }, (err) => {
@@ -327,7 +328,9 @@ class TunnelServer extends EventEmitter {
                 return;
             }
 
-            if (this.outboundQueue.length > 0) {
+            this.compactOutboundQueueIfNeeded();
+
+            if (this.outboundQueueHead < this.outboundQueue.length) {
                 setImmediate(() => this.flushOutboundQueue());
             }
             });
@@ -342,9 +345,18 @@ class TunnelServer extends EventEmitter {
         }
     }
 
+    compactOutboundQueueIfNeeded() {
+        if (this.outboundQueueHead === 0) return;
+        if (this.outboundQueueHead < 1024 && this.outboundQueueHead * 2 < this.outboundQueue.length) return;
+
+        this.outboundQueue = this.outboundQueue.slice(this.outboundQueueHead);
+        this.outboundQueueHead = 0;
+    }
+
     resetOutboundQueue() {
         this.outboundQueue = [];
         this.outboundQueueBytes = 0;
+        this.outboundQueueHead = 0;
         this.isFlushingQueue = false;
         if (this.flushRetryTimer) {
             clearTimeout(this.flushRetryTimer);

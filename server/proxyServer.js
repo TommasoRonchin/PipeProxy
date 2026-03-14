@@ -40,6 +40,7 @@ const MAX_PROXY_TIMEOUT_MS = process.env.MAX_PROXY_TIMEOUT_MS ? parseInt(process
 const REWRITE_PROXY_URLS = process.env.REWRITE_PROXY_URLS !== 'false'; // Default true
 const FORCE_CONNECTION_CLOSE = process.env.FORCE_CONNECTION_CLOSE === 'true'; // Default false (better throughput, fewer churn stalls)
 const SMART_HTTP_CLOSE = process.env.SMART_HTTP_CLOSE !== 'false'; // Default true: close only risky/plain-HTTP cases
+const STRICT_HTTP_FRAMING = process.env.STRICT_HTTP_FRAMING !== 'false'; // Default true: reject suspicious/ambiguous framing patterns
 const MAX_CONCURRENT_PROXY_CONNECTIONS = process.env.MAX_CONCURRENT_PROXY_CONNECTIONS ? parseInt(process.env.MAX_CONCURRENT_PROXY_CONNECTIONS, 10) : 500;
 
 let activeProxyConnections = 0;
@@ -64,38 +65,105 @@ function validateAuth(headerText) {
 
 function parseHeaderFraming(lines) {
     let transferEncoding = null;
+    let transferEncodingSeen = false;
+    let hasConnectionTEHint = false;
+    const hostValues = [];
     const contentLengthValues = [];
 
     for (let i = 1; i < lines.length; i++) {
         const line = lines[i];
         const colonIdx = line.indexOf(':');
-        if (colonIdx === -1) continue;
+        if (colonIdx === -1) {
+            if (line.trim().length > 0) {
+                return { invalid: true, reason: 'Malformed header line' };
+            }
+            continue;
+        }
+
         const name = line.substring(0, colonIdx).trim().toLowerCase();
         const value = line.substring(colonIdx + 1).trim();
 
+        if (!name) {
+            return { invalid: true, reason: 'Empty header name' };
+        }
+
         if (name === 'transfer-encoding') {
+            transferEncodingSeen = true;
             transferEncoding = value.toLowerCase();
         } else if (name === 'content-length') {
-            const parsed = parseInt(value, 10);
-            if (!Number.isFinite(parsed) || parsed < 0) {
-                return { invalid: true };
+            // Strict parse: only plain non-negative integer accepted.
+            if (!/^\d+$/.test(value)) {
+                return { invalid: true, reason: 'Invalid Content-Length' };
             }
+            const parsed = parseInt(value, 10);
             contentLengthValues.push(parsed);
+        } else if (name === 'host') {
+            hostValues.push(value.toLowerCase());
+        } else if (name === 'connection') {
+            const tokens = value.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean);
+            if (tokens.includes('transfer-encoding') || tokens.includes('te')) {
+                hasConnectionTEHint = true;
+            }
+        }
+    }
+
+    if (hostValues.length > 1) {
+        const firstHost = hostValues[0];
+        for (let i = 1; i < hostValues.length; i++) {
+            if (hostValues[i] !== firstHost) {
+                return { invalid: true, reason: 'Conflicting Host headers' };
+            }
         }
     }
 
     if (contentLengthValues.length > 1) {
+        if (STRICT_HTTP_FRAMING) {
+            return { invalid: true, reason: 'Duplicate Content-Length headers' };
+        }
         const first = contentLengthValues[0];
         for (let i = 1; i < contentLengthValues.length; i++) {
             if (contentLengthValues[i] !== first) {
-                return { invalid: true };
+                return { invalid: true, reason: 'Conflicting Content-Length headers' };
+            }
+        }
+    }
+
+    let hasChunked = false;
+    let chunkedIsFinal = false;
+    let transferEncodings = [];
+    if (transferEncodingSeen) {
+        if (!transferEncoding || transferEncoding.trim() === '') {
+            return { invalid: true, reason: 'Empty Transfer-Encoding' };
+        }
+
+        transferEncodings = transferEncoding.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean);
+        if (transferEncodings.length === 0) {
+            return { invalid: true, reason: 'Empty Transfer-Encoding' };
+        }
+
+        hasChunked = transferEncodings.includes('chunked');
+        chunkedIsFinal = transferEncodings[transferEncodings.length - 1] === 'chunked';
+
+        // In strict mode, reject non-chunked TE requests and non-final chunked.
+        if (STRICT_HTTP_FRAMING) {
+            if (!hasChunked) {
+                return { invalid: true, reason: 'Unsupported Transfer-Encoding' };
+            }
+            if (!chunkedIsFinal) {
+                return { invalid: true, reason: 'Chunked must be final Transfer-Encoding' };
             }
         }
     }
 
     return {
         invalid: false,
+        reason: null,
         transferEncoding,
+        transferEncodings,
+        hasChunked,
+        chunkedIsFinal,
+        hasConnectionTEHint,
+        hasDuplicateContentLength: contentLengthValues.length > 1,
         contentLength: contentLengthValues.length > 0 ? contentLengthValues[0] : null
     };
 }
@@ -107,6 +175,10 @@ function shouldForceCloseForHttp({ method, framing, extraDataLength }) {
     // Always close on framed bodies to reduce parser-desync/smuggling surface.
     if (framing.transferEncoding) return true;
     if (framing.contentLength && framing.contentLength > 0) return true;
+
+    // Multiple CL (even equal) and TE hints in Connection are suspicious; allow but isolate.
+    if (framing.hasDuplicateContentLength) return true;
+    if (framing.hasConnectionTEHint) return true;
 
     // Keep-alive only for simple safe methods.
     const safeMethods = new Set(['GET', 'HEAD', 'OPTIONS']);
@@ -286,7 +358,8 @@ const proxyConnectionHandler = (socket) => {
 
             const framing = parseHeaderFraming(lines);
             if (framing.invalid) {
-                socket.end('HTTP/1.1 400 Bad Request\r\n\r\nInvalid HTTP framing\n');
+                const reason = framing.reason ? `Invalid HTTP framing: ${framing.reason}` : 'Invalid HTTP framing';
+                socket.end(`HTTP/1.1 400 Bad Request\r\n\r\n${reason}\n`);
                 setImmediate(() => socket.destroy());
                 return;
             }

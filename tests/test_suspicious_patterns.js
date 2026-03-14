@@ -1,0 +1,221 @@
+const net = require('net');
+const http = require('http');
+const path = require('path');
+const { spawn } = require('child_process');
+
+const PROXY_PORT = 3181;
+const TUNNEL_PORT = 8181;
+const TARGET_PORT = 4181;
+
+function delay(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parseHttpResponse(buffer) {
+    const text = buffer.toString('utf8');
+    const firstLineEnd = text.indexOf('\r\n');
+    const statusLine = firstLineEnd >= 0 ? text.substring(0, firstLineEnd) : text;
+    const statusMatch = statusLine.match(/HTTP\/1\.[01]\s+(\d{3})/);
+    const statusCode = statusMatch ? parseInt(statusMatch[1], 10) : 0;
+
+    const headerEnd = text.indexOf('\r\n\r\n');
+    const body = headerEnd >= 0 ? text.substring(headerEnd + 4) : '';
+
+    return { statusCode, statusLine, body, raw: text };
+}
+
+function extractJsonBody(responseBody) {
+    const start = responseBody.indexOf('{');
+    const end = responseBody.lastIndexOf('}');
+    if (start === -1 || end === -1 || end <= start) return null;
+    try {
+        return JSON.parse(responseBody.substring(start, end + 1));
+    } catch {
+        return null;
+    }
+}
+
+function sendRawProxyRequest(rawRequest, timeoutMs = 6000) {
+    return new Promise((resolve, reject) => {
+        const socket = net.connect(PROXY_PORT, '127.0.0.1', () => {
+            socket.write(rawRequest);
+        });
+
+        const chunks = [];
+        socket.on('data', (d) => chunks.push(d));
+        socket.on('error', (err) => reject(err));
+        socket.on('close', () => resolve(parseHttpResponse(Buffer.concat(chunks))));
+
+        setTimeout(() => {
+            if (!socket.destroyed) socket.destroy();
+        }, timeoutMs);
+    });
+}
+
+async function main() {
+    const targetServer = http.createServer((req, res) => {
+        const bodyChunks = [];
+        req.on('data', (c) => bodyChunks.push(c));
+        req.on('end', () => {
+            const body = Buffer.concat(bodyChunks).toString('utf8');
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                method: req.method,
+                url: req.url,
+                headers: req.headers,
+                body
+            }));
+        });
+    });
+
+    await new Promise((resolve) => targetServer.listen(TARGET_PORT, '127.0.0.1', resolve));
+
+    const baseEnv = {
+        ...process.env,
+        SKIP_DOTENV: 'true',
+        PORT: String(PROXY_PORT),
+        TUNNEL_PORT: String(TUNNEL_PORT),
+        TUNNEL_SECRET: 'suspicious_test_secret',
+        SERVER_URL: `ws://127.0.0.1:${TUNNEL_PORT}`,
+        ENABLE_TLS_PROXY: 'false',
+        BLOCK_LOCAL_NETWORK: 'false',
+        FORCE_CONNECTION_CLOSE: 'false',
+        SMART_HTTP_CLOSE: 'true',
+        STRICT_HTTP_FRAMING: 'true',
+        ENABLE_ENCRYPTION: 'true',
+        ENCRYPTION_SECRET: 'a'.repeat(32)
+    };
+
+    const proxyProc = spawn('node', [path.join(__dirname, '..', 'server', 'proxyServer.js')], { env: baseEnv });
+    const clientProc = spawn('node', [path.join(__dirname, '..', 'client', 'raspberryClient.js')], { env: baseEnv });
+
+    proxyProc.stderr.on('data', (d) => process.stderr.write(`[PROXY ERR] ${d.toString()}`));
+    clientProc.stderr.on('data', (d) => process.stderr.write(`[CLIENT ERR] ${d.toString()}`));
+
+    await delay(2200);
+
+    let passed = 0;
+    let failed = 0;
+
+    function assert(condition, name, details) {
+        if (condition) {
+            console.log(`  PASS ${name}`);
+            passed++;
+        } else {
+            console.error(`  FAIL ${name}${details ? ` -> ${details}` : ''}`);
+            failed++;
+        }
+    }
+
+    console.log('=== Suspicious Pattern Recognition Suite ===');
+
+    const reqBase = `http://127.0.0.1:${TARGET_PORT}`;
+
+    const r1 = await sendRawProxyRequest(
+        `GET ${reqBase}/safe HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\n\r\n`
+    );
+    assert(r1.statusCode === 200, 'baseline-safe-get', r1.statusLine);
+
+    const r2 = await sendRawProxyRequest(
+        `GET ${reqBase}/dup-cl-eq HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nContent-Length: 0\r\nContent-Length: 0\r\n\r\n`
+    );
+    assert(r2.statusCode === 400, 'duplicate-cl-equal-rejected-in-strict-mode', r2.statusLine);
+
+    const r3 = await sendRawProxyRequest(
+        `GET ${reqBase}/dup-cl-conflict HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nContent-Length: 0\r\nContent-Length: 1\r\n\r\n`
+    );
+    assert(r3.statusCode === 400, 'duplicate-cl-conflict-rejected', r3.statusLine);
+
+    const r4 = await sendRawProxyRequest(
+        `POST ${reqBase}/invalid-cl HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nContent-Length: 5x\r\n\r\nhello`
+    );
+    assert(r4.statusCode === 400, 'invalid-cl-nonnumeric-rejected', r4.statusLine);
+
+    const r5 = await sendRawProxyRequest(
+        `GET ${reqBase}/malformed-header HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nBadHeaderWithoutColon\r\n\r\n`
+    );
+    assert(r5.statusCode === 400, 'malformed-header-line-rejected', r5.statusLine);
+
+    const r6 = await sendRawProxyRequest(
+        `GET ${reqBase}/empty-header-name HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\n: value\r\n\r\n`
+    );
+    assert(r6.statusCode === 400, 'empty-header-name-rejected', r6.statusLine);
+
+    const r7 = await sendRawProxyRequest(
+        `GET ${reqBase}/host-conflict HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nHost: evil.local\r\n\r\n`
+    );
+    assert(r7.statusCode === 400, 'conflicting-host-rejected', r7.statusLine);
+
+    const r8 = await sendRawProxyRequest(
+        `POST ${reqBase}/te-cl HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nTransfer-Encoding: chunked\r\nContent-Length: 5\r\n\r\n0\r\n\r\n`
+    );
+    assert(r8.statusCode === 400, 'te-cl-conflict-rejected', r8.statusLine);
+
+    const r9 = await sendRawProxyRequest(
+        `POST ${reqBase}/te-unsupported HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nTransfer-Encoding: gzip\r\n\r\n`
+    );
+    assert(r9.statusCode === 400, 'te-unsupported-rejected', r9.statusLine);
+
+    const r10 = await sendRawProxyRequest(
+        `POST ${reqBase}/te-nonfinal-chunked HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nTransfer-Encoding: chunked, gzip\r\n\r\n`
+    );
+    assert(r10.statusCode === 400, 'te-nonfinal-chunked-rejected', r10.statusLine);
+
+    const r11 = await sendRawProxyRequest(
+        `POST ${reqBase}/te-empty HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nTransfer-Encoding:\r\n\r\n`
+    );
+    assert(r11.statusCode === 400, 'te-empty-rejected', r11.statusLine);
+
+    const r12 = await sendRawProxyRequest(
+        `POST ${reqBase}/chunked-ok HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nWiki\r\n0\r\n\r\n`
+    );
+    const j12 = extractJsonBody(r12.body);
+    assert(r12.statusCode === 200 && j12 && j12.body === 'Wiki', 'valid-chunked-forwarded', r12.statusLine);
+
+    const r13 = await sendRawProxyRequest(
+        `POST ${reqBase}/post-close HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nContent-Length: 4\r\n\r\ntest`
+    );
+    const j13 = extractJsonBody(r13.body);
+    assert(r13.statusCode === 200 && j13 && j13.headers && j13.headers.connection === 'close', 'post-with-body-forced-close', j13 ? JSON.stringify(j13.headers) : r13.statusLine);
+
+    const r14 = await sendRawProxyRequest(
+        `GET ${reqBase}/get-keepalive HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\n\r\n`
+    );
+    const j14 = extractJsonBody(r14.body);
+    assert(r14.statusCode === 200 && j14 && j14.headers && j14.headers.connection !== 'close', 'safe-get-kept-alive', j14 ? JSON.stringify(j14.headers) : r14.statusLine);
+
+    const r15 = await sendRawProxyRequest(
+        `GET ${reqBase}/connection-te-hint HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nConnection: keep-alive, transfer-encoding\r\n\r\n`
+    );
+    const j15 = extractJsonBody(r15.body);
+    assert(r15.statusCode === 200 && j15 && j15.headers && j15.headers.connection === 'close', 'connection-te-hint-isolated-with-close', j15 ? JSON.stringify(j15.headers) : r15.statusLine);
+
+    const r16 = await sendRawProxyRequest(
+        `GET ${reqBase}/obs-fold HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\nX-Test: one\r\n\tcontinued\r\n\r\n`
+    );
+    assert(r16.statusCode === 400, 'obs-fold-rejected', r16.statusLine);
+
+    const r17 = await sendRawProxyRequest(
+        `GET ${reqBase}/pipeline-safe HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\n\r\nGET ${reqBase}/pipeline-safe-2 HTTP/1.1\r\nHost: 127.0.0.1:${TARGET_PORT}\r\n\r\n`
+    );
+    assert(r17.raw.includes('/pipeline-safe') && r17.raw.includes('/pipeline-safe-2'), 'http-pipelining-still-works', r17.statusLine);
+
+    console.log('==========================================');
+    console.log(`Suspicious-pattern tests passed: ${passed}`);
+    console.log(`Suspicious-pattern tests failed: ${failed}`);
+    console.log('==========================================');
+
+    if (!proxyProc.killed) proxyProc.kill('SIGKILL');
+    if (!clientProc.killed) clientProc.kill('SIGKILL');
+    await delay(300);
+    await new Promise((resolve) => targetServer.close(resolve));
+
+    if (failed > 0) {
+        process.exitCode = 1;
+    }
+}
+
+main().catch((err) => {
+    console.error('Fatal error in suspicious-pattern test:', err);
+    process.exit(1);
+});

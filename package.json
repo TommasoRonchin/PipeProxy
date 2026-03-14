@@ -5,6 +5,7 @@
   "main": "server/proxyServer.js",
   "scripts": {
     "test": "node tests/test_comprehensive.js",
+    "test:suspicious": "node tests/test_suspicious_patterns.js",
     "server": "node server/proxyServer.js",
     "client": "node client/raspberryClient.js"
   },

@@ -171,6 +171,12 @@ npm test
 ```
 *Note: The tests will automatically spawn dummy backends and temporary server/client instances on high ports.*
 
+**Run Suspicious HTTP Pattern Suite (Smuggling/Framing):**
+```bash
+npm run test:suspicious
+```
+*This suite stress-tests malformed and ambiguous HTTP framing patterns (e.g., TE/CL conflicts, invalid headers, suspicious duplicates) against the real proxy pipeline.*
+
 ---
 
 ## 🛠️ Advanced Features
@@ -295,6 +301,7 @@ You can fine-tune the system behavior by setting these environment variables in 
 #### 🛠️ Routing Behavior
 - `FORCE_CONNECTION_CLOSE=false`: (Server-only) Forces `Connection: close` globally when explicitly enabled.
 - `SMART_HTTP_CLOSE=true`: (Server-only) Smart default policy: keep-alive for simple safe methods, force close or reject invalid/risky HTTP framing.
+- `STRICT_HTTP_FRAMING=true`: (Server-only) Rejects malformed/ambiguous HTTP framing patterns before forwarding.
 - `REWRITE_PROXY_URLS=true`: (Server-only) Normalizes absolute proxy URLs to paths.
 - `IPV4_FALLBACK_TIMEOUT_MS=250`: (Client-only) Wait time (in ms) before falling back from a dead IPv6 route to IPv4 (Happy Eyeballs).
 

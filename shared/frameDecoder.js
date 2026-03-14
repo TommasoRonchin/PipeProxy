@@ -12,7 +12,7 @@ class FrameDecoder extends EventEmitter {
         this.chunkOffset = 0; // Track offset in the first chunk instead of shifting
 
         const envMax = parseInt(process.env.MAX_FRAME_SIZE, 10);
-        this.maxFrameSize = isNaN(envMax) ? (10 * 1024 * 1024) : envMax;
+        this.maxFrameSize = isNaN(envMax) ? (50 * 1024 * 1024) : envMax; // Increased to 50MB
     }
 
     push(chunk) {

@@ -266,6 +266,10 @@ class TunnelServer extends EventEmitter {
     isReady() {
         return this.activeWs && this.activeWs.readyState === 1;
     }
+
+    getBufferedAmount() {
+        return this.activeWs ? this.activeWs.bufferedAmount : 0;
+    }
 }
 
 module.exports = TunnelServer;

@@ -12,13 +12,23 @@ class FrameProtocol extends EventEmitter {
         this.nextConnectionId = isNaN(startId) ? 1 : startId;
 
         const envMaxBuffer = parseInt(process.env.MAX_SOCKET_BUFFER_MB, 10);
-        this.maxSocketBuffer = isNaN(envMaxBuffer) ? (1 * 1024 * 1024) : (envMaxBuffer * 1024 * 1024);
+        this.maxSocketBuffer = isNaN(envMaxBuffer) ? (10 * 1024 * 1024) : (envMaxBuffer * 1024 * 1024);
+
+        // Backpressure Settings
+        const envHighMem = parseInt(process.env.WS_HIGH_WATER_MARK_MB, 10);
+        const envLowMem = parseInt(process.env.WS_LOW_WATER_MARK_MB, 10);
+        this.wsHighWaterMark = isNaN(envHighMem) ? (64 * 1024 * 1024) : (envHighMem * 1024 * 1024);
+        this.wsLowWaterMark = isNaN(envLowMem) ? (16 * 1024 * 1024) : (envLowMem * 1024 * 1024);
+
+        // Backpressure monitor - Fast drain check
+        this.drainInterval = setInterval(() => this.checkDrain(), 10);
 
         // Listen to incoming frames from the tunnel
         this.tunnelServer.on('frame', (frame) => this.handleIncomingFrame(frame));
 
         // Cleanup on tunnel close
         this.tunnelServer.on('tunnel_close', () => {
+            clearInterval(this.drainInterval);
             this.closeAllConnections();
         });
     }
@@ -96,6 +106,14 @@ class FrameProtocol extends EventEmitter {
         // Handle local socket data
         socket.on('data', (data) => {
             this.tunnelServer.sendFrame(TYPES.DATA, connectionId, data);
+            
+            // Backpressure: If tunnel is full, pause THIS socket
+            if (this.tunnelServer.getBufferedAmount() > this.wsHighWaterMark) {
+                if (!socket._isPausedByBackpressure) {
+                    socket.pause();
+                    socket._isPausedByBackpressure = true;
+                }
+            }
         });
 
         // Cleanup local socket
@@ -113,7 +131,19 @@ class FrameProtocol extends EventEmitter {
         return connectionId;
     }
 
+    checkDrain() {
+        if (this.tunnelServer.isReady() && this.tunnelServer.getBufferedAmount() <= this.wsLowWaterMark) {
+            for (const [connId, socket] of this.connections) {
+                if (socket._isPausedByBackpressure) {
+                    socket._isPausedByBackpressure = false;
+                    socket.resume();
+                }
+            }
+        }
+    }
+
     closeAllConnections() {
+        clearInterval(this.drainInterval);
         for (const [connId, socket] of this.connections) {
             this.emit('close', connId);
             socket.destroy();

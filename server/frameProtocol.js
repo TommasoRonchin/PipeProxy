@@ -20,8 +20,9 @@ class FrameProtocol extends EventEmitter {
         this.wsHighWaterMark = isNaN(envHighMem) ? (64 * 1024 * 1024) : (envHighMem * 1024 * 1024);
         this.wsLowWaterMark = isNaN(envLowMem) ? (16 * 1024 * 1024) : (envLowMem * 1024 * 1024);
 
-        // Backpressure monitor - Fast drain check
-        this.drainInterval = setInterval(() => this.checkDrain(), 10);
+        // Backpressure monitor for paused sockets; keep frequency moderate to reduce CPU churn.
+        this.drainInterval = null;
+        this.startDrainMonitor();
 
         // Listen to incoming frames from the tunnel
         this.tunnelServer.on('frame', (frame) => this.handleIncomingFrame(frame));
@@ -29,7 +30,12 @@ class FrameProtocol extends EventEmitter {
         // Cleanup on tunnel close
         this.tunnelServer.on('tunnel_close', () => {
             clearInterval(this.drainInterval);
+            this.drainInterval = null;
             this.closeAllConnections();
+        });
+
+        this.tunnelServer.on('tunnel_ready', () => {
+            this.startDrainMonitor();
         });
     }
 
@@ -140,6 +146,11 @@ class FrameProtocol extends EventEmitter {
                 }
             }
         }
+    }
+
+    startDrainMonitor() {
+        if (this.drainInterval) return;
+        this.drainInterval = setInterval(() => this.checkDrain(), 25);
     }
 
     closeAllConnections() {

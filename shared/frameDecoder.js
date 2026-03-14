@@ -8,6 +8,7 @@ class FrameDecoder extends EventEmitter {
     constructor() {
         super();
         this.chunks = [];
+        this.chunkStart = 0;
         this.totalLength = 0;
         this.chunkOffset = 0; // Track offset in the first chunk instead of shifting
 
@@ -31,8 +32,17 @@ class FrameDecoder extends EventEmitter {
 
     _reset() {
         this.chunks = [];
+        this.chunkStart = 0;
         this.totalLength = 0;
         this.chunkOffset = 0;
+    }
+
+    _compactChunksIfNeeded() {
+        // Compact occasionally so indexing stays O(1) without frequent Array.shift churn.
+        if (this.chunkStart > 1024 && this.chunkStart * 2 > this.chunks.length) {
+            this.chunks = this.chunks.slice(this.chunkStart);
+            this.chunkStart = 0;
+        }
     }
 
     _processBuffer() {
@@ -66,7 +76,7 @@ class FrameDecoder extends EventEmitter {
     _peek(n) {
         if (this.totalLength < n) return Buffer.alloc(0);
 
-        const firstChunk = this.chunks[0];
+        const firstChunk = this.chunks[this.chunkStart];
         const availInFirst = firstChunk.length - this.chunkOffset;
 
         if (availInFirst >= n) {
@@ -75,9 +85,9 @@ class FrameDecoder extends EventEmitter {
 
         const buffer = Buffer.allocUnsafe(n);
         let offset = 0;
-        for (let i = 0; i < this.chunks.length; i++) {
+        for (let i = this.chunkStart; i < this.chunks.length; i++) {
             const chunk = this.chunks[i];
-            const start = (i === 0) ? this.chunkOffset : 0;
+            const start = (i === this.chunkStart) ? this.chunkOffset : 0;
             const toCopy = Math.min(chunk.length - start, n - offset);
             
             chunk.copy(buffer, offset, start, start + toCopy);
@@ -94,7 +104,7 @@ class FrameDecoder extends EventEmitter {
     _consume(n) {
         if (this.totalLength < n || n === 0) return Buffer.alloc(0);
 
-        const firstChunk = this.chunks[0];
+        const firstChunk = this.chunks[this.chunkStart];
         const availInFirst = firstChunk.length - this.chunkOffset;
 
         if (availInFirst > n) {
@@ -104,23 +114,24 @@ class FrameDecoder extends EventEmitter {
             return result;
         } else if (availInFirst === n) {
             const result = firstChunk.subarray(this.chunkOffset);
-            this.chunks.shift();
+            this.chunkStart++;
             this.chunkOffset = 0;
             this.totalLength -= n;
+            this._compactChunksIfNeeded();
             return result;
         } else {
             const result = Buffer.allocUnsafe(n);
             let offset = 0;
-            while (offset < n && this.chunks.length > 0) {
-                const chunk = this.chunks[0];
-                const start = this.chunkOffset;
+            while (offset < n && this.chunkStart < this.chunks.length) {
+                const chunk = this.chunks[this.chunkStart];
+                const start = (this.chunkStart < this.chunks.length) ? this.chunkOffset : 0;
                 const toCopy = Math.min(chunk.length - start, n - offset);
                 
                 chunk.copy(result, offset, start, start + toCopy);
                 offset += toCopy;
                 
                 if (start + toCopy === chunk.length) {
-                    this.chunks.shift();
+                    this.chunkStart++;
                     this.chunkOffset = 0;
                 } else {
                     this.chunkOffset += toCopy;
@@ -132,6 +143,7 @@ class FrameDecoder extends EventEmitter {
             }
 
             this.totalLength -= n;
+            this._compactChunksIfNeeded();
             return result;
         }
     }

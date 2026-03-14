@@ -98,7 +98,11 @@ class CryptoStream {
         const decipher = crypto.createDecipheriv('aes-256-gcm', this.key, iv);
         decipher.setAuthTag(authTag);
 
-        const decryptedPayloadWithSeq = Buffer.concat([decipher.update(encrypted), decipher.final()]);
+        const d1 = decipher.update(encrypted);
+        const d2 = decipher.final();
+        const decryptedPayloadWithSeq = Buffer.allocUnsafe(d1.length + d2.length);
+        d1.copy(decryptedPayloadWithSeq, 0);
+        d2.copy(decryptedPayloadWithSeq, d1.length);
 
         // Extract and verify Sequence Number
         if (decryptedPayloadWithSeq.length < 4) {

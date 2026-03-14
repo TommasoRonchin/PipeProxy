@@ -32,8 +32,15 @@ class ConnectionManager {
         this.wsHighWaterMark = isNaN(envHighMem) ? (64 * 1024 * 1024) : (envHighMem * 1024 * 1024); 
         this.wsLowWaterMark = isNaN(envLowMem) ? (16 * 1024 * 1024) : (envLowMem * 1024 * 1024);   
 
+        const envMaxQueue = parseInt(process.env.MAX_CLIENT_QUEUE_MB, 10);
+        this.maxQueueBytes = isNaN(envMaxQueue) ? (128 * 1024 * 1024) : (envMaxQueue * 1024 * 1024);
+        this.outboundQueue = [];
+        this.outboundQueueBytes = 0;
+        this.isFlushingQueue = false;
+        this.flushRetryTimer = null;
+
         // Backpressure monitor loops - Faster drain check
-        this.drainInterval = setInterval(() => this.checkDrain(), 10);
+        this.drainInterval = setInterval(() => this.checkDrain(), 25);
 
         // Wire the decoder output to handle individual logic frames
         this.decoder.on('frame', (frame) => this.handleFrame(frame));
@@ -54,7 +61,16 @@ class ConnectionManager {
             try {
                 const frame = encodeFrame(type, connId, payload);
                 const encrypted = this.cryptoStream.encryptMessage(frame);
-                this.ws.send(encrypted, { binary: true });
+
+                if (this.outboundQueueBytes + encrypted.length > this.maxQueueBytes) {
+                    console.error('[ConnectionManager] Outbound queue overflow. Terminating websocket to recover from backpressure.');
+                    this.ws.terminate();
+                    return;
+                }
+
+                this.outboundQueue.push(encrypted);
+                this.outboundQueueBytes += encrypted.length;
+                this.flushOutboundQueue();
             } catch (e) {
                 console.error(`[ConnectionManager] Error sending frame: ${e.message}`);
             }
@@ -249,6 +265,7 @@ class ConnectionManager {
     }
 
     closeAllConnections() {
+        this.resetOutboundQueue();
         clearInterval(this.drainInterval);
         for (const [connId, socket] of this.connections) {
             socket.destroy();
@@ -264,6 +281,67 @@ class ConnectionManager {
                     socket.resume();
                 }
             }
+
+            if (this.outboundQueue.length > 0) {
+                this.flushOutboundQueue();
+            }
+        }
+    }
+
+    flushOutboundQueue() {
+        if (this.isFlushingQueue) return;
+        if (!this.ws || this.ws.readyState !== 1) return;
+        if (this.outboundQueue.length === 0) return;
+
+        if (this.ws.bufferedAmount > this.wsHighWaterMark) {
+            if (!this.flushRetryTimer) {
+                this.flushRetryTimer = setTimeout(() => {
+                    this.flushRetryTimer = null;
+                    this.flushOutboundQueue();
+                }, 5);
+            }
+            return;
+        }
+
+        this.isFlushingQueue = true;
+        const chunk = this.outboundQueue.shift();
+
+        try {
+            this.ws.send(chunk, { binary: true }, (err) => {
+            this.isFlushingQueue = false;
+            this.outboundQueueBytes -= chunk.length;
+            if (this.outboundQueueBytes < 0) this.outboundQueueBytes = 0;
+
+            if (err) {
+                console.error(`[ConnectionManager] WS send failed: ${err.message}`);
+                if (this.ws && this.ws.readyState === 1) {
+                    this.ws.terminate();
+                }
+                return;
+            }
+
+            if (this.outboundQueue.length > 0) {
+                setImmediate(() => this.flushOutboundQueue());
+            }
+            });
+        } catch (err) {
+            this.isFlushingQueue = false;
+            this.outboundQueueBytes -= chunk.length;
+            if (this.outboundQueueBytes < 0) this.outboundQueueBytes = 0;
+            console.error(`[ConnectionManager] WS send threw: ${err.message}`);
+            if (this.ws && this.ws.readyState === 1) {
+                this.ws.terminate();
+            }
+        }
+    }
+
+    resetOutboundQueue() {
+        this.outboundQueue = [];
+        this.outboundQueueBytes = 0;
+        this.isFlushingQueue = false;
+        if (this.flushRetryTimer) {
+            clearTimeout(this.flushRetryTimer);
+            this.flushRetryTimer = null;
         }
     }
 

@@ -21,6 +21,17 @@ class TunnelServer extends EventEmitter {
         this.usedNonces = new Map();
         this.maxNonceTrackingSize = process.env.MAX_NONCE_TRACKING_SIZE ? parseInt(process.env.MAX_NONCE_TRACKING_SIZE, 10) : 100000;
 
+        const envWsHigh = parseInt(process.env.WS_HIGH_WATER_MARK_MB, 10);
+        this.wsHighWaterMark = isNaN(envWsHigh) ? (64 * 1024 * 1024) : (envWsHigh * 1024 * 1024);
+
+        const envMaxQueue = parseInt(process.env.MAX_TUNNEL_QUEUE_MB, 10);
+        this.maxQueueBytes = isNaN(envMaxQueue) ? (128 * 1024 * 1024) : (envMaxQueue * 1024 * 1024);
+
+        this.outboundQueue = [];
+        this.outboundQueueBytes = 0;
+        this.isFlushingQueue = false;
+        this.flushRetryTimer = null;
+
         // Per-connection crypto stream (initialized on connection)
         this.cryptoStream = null;
 
@@ -139,6 +150,9 @@ class TunnelServer extends EventEmitter {
                     this.activeWs.close(1000, 'New connection established');
                 }
 
+                // Reset any queued frames that belong to the previous tunnel session
+                this.resetOutboundQueue();
+
                 // Inizializza il Crypto Stream per questa specifica connessione socket
                 const sessionNonce = req.headers['x-tunnel-session-nonce'] || '';
                 ws.cryptoStream = new CryptoStream({
@@ -176,6 +190,7 @@ class TunnelServer extends EventEmitter {
                     if (this.activeWs === ws) {
                         console.log(`[TunnelServer] Raspberry Pi connection closed`);
                         this.activeWs = null;
+                        this.resetOutboundQueue();
                         clearInterval(this.pingInterval);
                         this.emit('tunnel_close');
                     }
@@ -213,6 +228,7 @@ class TunnelServer extends EventEmitter {
     }
 
     stop() {
+        this.resetOutboundQueue();
         if (this.nonceCleanupInterval) {
             clearInterval(this.nonceCleanupInterval);
             this.nonceCleanupInterval = null;
@@ -255,7 +271,15 @@ class TunnelServer extends EventEmitter {
             const frame = encodeFrame(type, connectionId, payload);
             const encrypted = this.activeWs.cryptoStream.encryptMessage(frame);
 
-            this.activeWs.send(encrypted, { binary: true });
+            if (this.outboundQueueBytes + encrypted.length > this.maxQueueBytes) {
+                console.error('[TunnelServer] Outbound queue overflow. Terminating tunnel to recover from backpressure.');
+                this.activeWs.terminate();
+                return false;
+            }
+
+            this.outboundQueue.push(encrypted);
+            this.outboundQueueBytes += encrypted.length;
+            this.flushOutboundQueue();
             return true;
         } catch (e) {
             console.error(`[TunnelServer] Error sending frame: ${e.message}`);
@@ -269,6 +293,63 @@ class TunnelServer extends EventEmitter {
 
     getBufferedAmount() {
         return this.activeWs ? this.activeWs.bufferedAmount : 0;
+    }
+
+    flushOutboundQueue() {
+        if (this.isFlushingQueue) return;
+        if (!this.activeWs || this.activeWs.readyState !== 1) return;
+        if (this.outboundQueue.length === 0) return;
+
+        if (this.activeWs.bufferedAmount > this.wsHighWaterMark) {
+            if (!this.flushRetryTimer) {
+                this.flushRetryTimer = setTimeout(() => {
+                    this.flushRetryTimer = null;
+                    this.flushOutboundQueue();
+                }, 5);
+            }
+            return;
+        }
+
+        this.isFlushingQueue = true;
+        const chunk = this.outboundQueue.shift();
+
+        try {
+            this.activeWs.send(chunk, { binary: true }, (err) => {
+            this.isFlushingQueue = false;
+            this.outboundQueueBytes -= chunk.length;
+            if (this.outboundQueueBytes < 0) this.outboundQueueBytes = 0;
+
+            if (err) {
+                console.error(`[TunnelServer] WS send failed: ${err.message}`);
+                if (this.activeWs && this.activeWs.readyState === 1) {
+                    this.activeWs.terminate();
+                }
+                return;
+            }
+
+            if (this.outboundQueue.length > 0) {
+                setImmediate(() => this.flushOutboundQueue());
+            }
+            });
+        } catch (err) {
+            this.isFlushingQueue = false;
+            this.outboundQueueBytes -= chunk.length;
+            if (this.outboundQueueBytes < 0) this.outboundQueueBytes = 0;
+            console.error(`[TunnelServer] WS send threw: ${err.message}`);
+            if (this.activeWs && this.activeWs.readyState === 1) {
+                this.activeWs.terminate();
+            }
+        }
+    }
+
+    resetOutboundQueue() {
+        this.outboundQueue = [];
+        this.outboundQueueBytes = 0;
+        this.isFlushingQueue = false;
+        if (this.flushRetryTimer) {
+            clearTimeout(this.flushRetryTimer);
+            this.flushRetryTimer = null;
+        }
     }
 }
 

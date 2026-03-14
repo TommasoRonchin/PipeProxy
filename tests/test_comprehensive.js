@@ -14,6 +14,24 @@ async function delay(ms) {
 // Variables to keep track of active servers for cleanup
 let activeServers = [];
 
+async function waitForOutput(process, pattern, timeout = 10000) {
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+            reject(new Error(`Timeout waiting for pattern: ${pattern} in process output`));
+        }, timeout);
+
+        const listener = (data) => {
+            if (pattern.test(data.toString())) {
+                process.stdout.removeListener('data', listener);
+                clearTimeout(timer);
+                resolve();
+            }
+        };
+
+        process.stdout.on('data', listener);
+    });
+}
+
 async function startTunnelSystem(envOverrides = {}) {
     const defaultEnv = {
         SKIP_DOTENV: 'true',
@@ -31,17 +49,6 @@ async function startTunnelSystem(envOverrides = {}) {
 
     const serverProcess = spawn('node', [serverPath], { env: { ...process.env, ...defaultEnv } });
 
-    // Client env needs SERVER_URL
-    const clientEnv = {
-        ...process.env,
-        ...defaultEnv,
-        SERVER_URL: `ws://127.0.0.1:${defaultEnv.TUNNEL_PORT}`
-    };
-
-    // If testing invalid tunnel secret, we might not start the client normally,
-    // or we might pass a wrong secret.
-    const clientProcess = spawn('node', [clientPath], { env: clientEnv });
-
     serverProcess.stdout.on('data', d => {
         const lines = d.toString().trim().split('\n');
         lines.forEach(l => console.log('[SERVER_OUT]', l));
@@ -50,6 +57,19 @@ async function startTunnelSystem(envOverrides = {}) {
         const lines = d.toString().trim().split('\n');
         lines.forEach(l => console.error('[SERVER_ERR]', l));
     });
+
+    // Wait for server to be ready
+    await waitForOutput(serverProcess, /Proxy is listening on port/);
+
+    // Client env needs SERVER_URL
+    const clientEnv = {
+        ...process.env,
+        ...defaultEnv,
+        SERVER_URL: `ws://127.0.0.1:${defaultEnv.TUNNEL_PORT}`
+    };
+
+    const clientProcess = spawn('node', [clientPath], { env: clientEnv });
+
     clientProcess.stdout.on('data', d => {
         const lines = d.toString().trim().split('\n');
         lines.forEach(l => console.log('[CLIENT_OUT]', l));
@@ -61,7 +81,9 @@ async function startTunnelSystem(envOverrides = {}) {
 
     activeServers.push(serverProcess, clientProcess);
 
-    await delay(2000); // Give time to boot and connect
+    // Wait for client to connect
+    await waitForOutput(clientProcess, /Connected to VPS Tunnel successfully/);
+
     return {
         serverProcess,
         clientProcess,

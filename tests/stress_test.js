@@ -11,9 +11,11 @@ process.env.UV_THREADPOOL_SIZE = 128;
 const TARGET_PORT = 9920;
 const PROXY_PORT = 3920;
 const TUNNEL_PORT = 8092;
-const PAYLOAD_SIZE = 1 * 1024 * 1024; // 1MB
-const CONCURRENT_REQUESTS = 30; 
-const TOTAL_MB_TARGET = 1024; 
+const PAYLOAD_SIZE = 4 * 1024 * 1024; // 4MB per request (reduces OPEN/CLOSE frame overhead)
+const CONCURRENT_REQUESTS = 20;
+const TOTAL_MB_TARGET = 10240; // 10GB
+const REQUEST_TIMEOUT_MS = 30000; // 30s idle timeout per request
+const STALL_DETECT_MS = 20000; // 20s without progress = stall detected
 
 function startTargetServer() {
     const payload = crypto.randomBytes(PAYLOAD_SIZE);
@@ -49,8 +51,13 @@ async function runBenchmark(proxyProc, clientProc) {
     let completed = 0;
     let failed = 0;
     let active = 0;
+    let timedOut = 0;
     const startTime = performance.now();
     let lastTime = startTime, lastBytes = 0;
+    let lastProgressTime = performance.now(); // for stall detection
+    let lastProgressBytes = 0;
+    let minInstSpeed = Infinity, maxInstSpeed = 0;
+    const activeRequests = new Set(); // track active requests for stall recovery
 
     const download = () => new Promise(resolve => {
         active++;
@@ -59,38 +66,79 @@ async function runBenchmark(proxyProc, clientProc) {
             if (finished) return;
             finished = true;
             active--;
-            if (err) failed++;
+            activeRequests.delete(req);
+            clearTimeout(hardTimeout);
+            if (err) {
+                failed++;
+                if (err === 'timeout') timedOut++;
+            }
             resolve();
         };
+
+        // Hard total timeout per request (prevents infinite hangs)
+        const hardTimeout = setTimeout(() => {
+            if (!finished) {
+                req.destroy();
+                done('timeout');
+            }
+        }, REQUEST_TIMEOUT_MS);
 
         const req = http.get({
             host: '127.0.0.1', port: PROXY_PORT,
             path: `http://127.0.0.1:${TARGET_PORT}/data`,
-            agent: false, timeout: 5000
+            agent: false, timeout: REQUEST_TIMEOUT_MS
         }, res => {
             let bytes = 0;
-            res.on('data', chunk => { bytes += chunk.length; totalDownloaded += chunk.length; });
+            res.on('data', chunk => {
+                bytes += chunk.length;
+                totalDownloaded += chunk.length;
+                // Update stall detection tracker
+                if (totalDownloaded > lastProgressBytes) {
+                    lastProgressTime = performance.now();
+                    lastProgressBytes = totalDownloaded;
+                }
+            });
             res.on('end', () => { 
                 if (bytes === PAYLOAD_SIZE) completed++; else failed++;
                 done();
             });
         });
+        activeRequests.add(req);
         req.on('error', () => done(true));
-        req.on('timeout', () => { req.destroy(); done(true); });
+        req.on('timeout', () => { req.destroy(); done('timeout'); });
     });
 
     const reporter = setInterval(() => {
         const now = performance.now();
         const dt = (now - lastTime) / 1000;
         const totalElapsed = (now - startTime) / 1000;
-        const speed = ((totalDownloaded - lastBytes) / 1024 / 1024 / dt).toFixed(2);
+        const instSpeed = ((totalDownloaded - lastBytes) / 1024 / 1024 / dt);
+        const avgSpeed = (totalDownloaded / 1024 / 1024 / totalElapsed);
         const progress = (totalDownloaded / 1024 / 1024).toFixed(0);
-        process.stdout.write(`\r[${totalElapsed.toFixed(0)}s] Progress: ${progress}/${TOTAL_MB_TARGET} MB | Inst: ${speed} MB/s | Active: ${active} | Fail: ${failed}    `);
+
+        if (instSpeed > 0 && isFinite(instSpeed)) {
+            if (instSpeed < minInstSpeed) minInstSpeed = instSpeed;
+            if (instSpeed > maxInstSpeed) maxInstSpeed = instSpeed;
+        }
+
+        const stallSec = ((now - lastProgressTime) / 1000).toFixed(0);
+        process.stdout.write(`\r[${totalElapsed.toFixed(0)}s] ${progress}/${TOTAL_MB_TARGET} MB | Inst: ${instSpeed.toFixed(2)} MB/s | Avg: ${avgSpeed.toFixed(2)} MB/s | Active: ${active} | OK: ${completed} | Fail: ${failed} | TO: ${timedOut} | Stall: ${stallSec}s    `);
         lastTime = now; lastBytes = totalDownloaded;
     }, 1000);
 
     const workerLoop = async () => {
         while ((totalDownloaded / 1024 / 1024) < TOTAL_MB_TARGET) {
+            // Stall detection: if no progress for STALL_DETECT_MS, abort active requests
+            const stallTime = performance.now() - lastProgressTime;
+            if (stallTime > STALL_DETECT_MS && active > 0) {
+                console.log(`\n[StressTest] STALL DETECTED: No progress for ${(stallTime/1000).toFixed(0)}s. Aborting ${activeRequests.size} stuck requests...`);
+                for (const req of activeRequests) {
+                    try { req.destroy(); } catch {}
+                }
+                await new Promise(r => setTimeout(r, 1000)); // brief cooldown
+                lastProgressTime = performance.now(); // reset stall timer
+            }
+
             await download();
             if (proxyProc.exitCode !== null || clientProc.exitCode !== null) break;
             await new Promise(r => setImmediate(r));
@@ -99,12 +147,34 @@ async function runBenchmark(proxyProc, clientProc) {
 
     await Promise.all(Array.from({ length: CONCURRENT_REQUESTS }, () => workerLoop()));
     clearInterval(reporter);
-    console.log('\nBenchmark Ended.');
-    return { totalMB: totalDownloaded / 1024 / 1024, duration: (performance.now() - startTime) / 1000 };
+
+    const totalElapsed = (performance.now() - startTime) / 1000;
+    const avgSpeed = (totalDownloaded / 1024 / 1024 / totalElapsed);
+
+    console.log('\n\n' + '='.repeat(60));
+    console.log('📊 STRESS TEST RESULTS');
+    console.log('='.repeat(60));
+    console.log(`Total Transferred:   ${(totalDownloaded / 1024 / 1024).toFixed(2)} MB / ${TOTAL_MB_TARGET} MB`);
+    console.log(`Total Duration:      ${totalElapsed.toFixed(2)} s`);
+    console.log(`Average Speed:       ${avgSpeed.toFixed(2)} MB/s`);
+    console.log(`Min Instant Speed:   ${minInstSpeed === Infinity ? 'N/A' : minInstSpeed.toFixed(2)} MB/s`);
+    console.log(`Max Instant Speed:   ${maxInstSpeed.toFixed(2)} MB/s`);
+    console.log(`Completed Requests:  ${completed}`);
+    console.log(`Failed Requests:     ${failed}`);
+    console.log(`Timed Out:           ${timedOut}`);
+    console.log(`Concurrent Workers:  ${CONCURRENT_REQUESTS}`);
+    console.log(`Payload Size:        ${PAYLOAD_SIZE / 1024 / 1024} MB`);
+    console.log('='.repeat(60));
+
+    return { totalMB: totalDownloaded / 1024 / 1024, duration: totalElapsed };
 }
 
 async function main() {
-    console.log('--- FINAL STRESS TEST (WITH ENCRYPTION) ---');
+    console.log('='.repeat(60));
+    console.log('🔥 10GB STRESS TEST (WITH ENCRYPTION) 🔥');
+    console.log('='.repeat(60));
+    console.log(`Config: ${TOTAL_MB_TARGET} MB target | ${PAYLOAD_SIZE / 1024 / 1024} MB chunks | ${CONCURRENT_REQUESTS} workers | ${REQUEST_TIMEOUT_MS/1000}s timeout\n`);
+
     const target = await startTargetServer();
     const proxy = spawnProcess('Proxy', path.join(__dirname, '../server/proxyServer.js'), {
         PORT: PROXY_PORT, TUNNEL_PORT: TUNNEL_PORT, TUNNEL_SECRET: 's', 
@@ -117,7 +187,7 @@ async function main() {
 
     await new Promise(r => setTimeout(r, 2000));
     const result = await runBenchmark(proxy, client);
-    console.log(`Final Result: ${result.totalMB.toFixed(2)} MB in ${result.duration.toFixed(2)}s (${(result.totalMB / result.duration).toFixed(2)} MB/s)`);
+    console.log(`\nFinal: ${result.totalMB.toFixed(2)} MB in ${result.duration.toFixed(2)}s (${(result.totalMB / result.duration).toFixed(2)} MB/s AVG)`);
     proxy.kill(); client.kill(); target.close();
 }
 main();

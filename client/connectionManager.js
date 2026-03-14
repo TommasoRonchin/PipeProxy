@@ -216,11 +216,12 @@ class ConnectionManager {
             }
         }
 
+        const ipv4FallbackTimeout = process.env.IPV4_FALLBACK_TIMEOUT_MS ? parseInt(process.env.IPV4_FALLBACK_TIMEOUT_MS, 10) : 250;
         const socketOptions = {
             host: host,
             port: port,
             autoSelectFamily: true,
-            autoSelectFamilyAttemptTimeout: 250,
+            autoSelectFamilyAttemptTimeout: ipv4FallbackTimeout,
             lookup: (hostname, options, callback) => {
                 if (options.all) callback(null, validAddresses);
                 else callback(null, validAddresses[0].address, validAddresses[0].family);

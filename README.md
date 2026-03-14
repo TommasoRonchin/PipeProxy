@@ -269,41 +269,66 @@ Every single multiplexed payload will be symmetrically encrypted natively in Nod
 
 ### Environment Customization
 
-You can fine-tune the system behavior by setting these environment variables in your `.env` file:
+### Environment Customization
+
+You can fine-tune every aspect of PipeProxy by setting these environment variables in your `.env` file (or specifically `.env.server` / `.env.client`).
+
+#### 🌐 Network & Tunnel
+- `SERVER_URL=ws://localhost:8080`: (Client) The VPS address to connect to.
+- `PORT=3128`: (Server) The public port where users connect to the proxy.
+- `TUNNEL_PORT=8080`: (Server) The internal port for the Raspberry Pi tunnel.
+- `TUNNEL_SECRET`: Shared secret between client and server for authentication.
+- `PING_INTERVAL_MS=30000`: Heartbeat interval to detect dead connections.
+- `RECONNECT_DELAY_MS=3000`: (Client) Wait time before tunnel reconnection attempts.
+- `IPV4_FALLBACK_TIMEOUT_MS=250`: (Client) Wait time before falling back to IPv4 (Happy Eyeballs).
 
 #### 🔐 Security & Handshake
-- `ENABLE_SECURE_HANDSHAKE=true`: Enables Challenge-Response HMAC login (prevents replay/sniffing).
-- `HANDSHAKE_TIMEOUT_MS=300000`: Allowed clock drift for secure handshakes (Default: 5 min).
-- `MAX_NONCE_TRACKING_SIZE=100000`: Limits memory usage by capping the number of stored handshake nonces.
-- `BLOCK_LOCAL_NETWORK=true`: (Client-only) Prevents SSRF by blocking connections to private/local IP ranges.
-- `RATE_LIMIT_MS=1000`: Minimum time between tunnel reconnections to prevent flapping DoS.
-- `STRICT_SEQUENCE_CHECK=true`: Rejects packets that arrive out of order (Encryption-only).
-- `DEBUG_START_ID=1`: (Optional) Forces the connection counter to start at a high value to test 32-bit wrapping.
+- `ENABLE_SECURE_HANDSHAKE=true`: Enables Challenge-Response HMAC login.
+- `HANDSHAKE_TIMEOUT_MS=300000`: Max clock drift for secure handshakes (5 min).
+- `MAX_NONCE_TRACKING_SIZE=100000`: (Server) Max handshake nonces to track (DoS protection).
+- `RATE_LIMIT_MS=1000`: (Server) Min time between tunnel flapping reconnections.
+- `BLOCK_LOCAL_NETWORK=true`: (Client) Prevents SSRF by blocking private IP ranges.
+- `STRICT_SEQUENCE_CHECK=true`: Rejects packets arriving out of order (Encryption-only).
 
-#### 🚀 Performance & Throughput
-- `MAX_CONNECTIONS=2000`: Hard cap on parallel streams per tunnel.
-- `MAX_CONCURRENT_PROXY_CONNECTIONS=500`: (Server-only) Max simultaneous public proxy clients.
-- `PING_INTERVAL_MS=30000`: Heartbeat interval to detect and drop dead connections.
-- `RECONNECT_DELAY_MS=3000`: (Client-only) Delay before attempting tunnel reconnection.
-- `WS_HIGH_WATER_MARK_MB=64`: (Client/Server) Buffer threshold to trigger backpressure throttling.
-- `WS_LOW_WATER_MARK_MB=16`: (Client/Server) Threshold to resume data flow after throttling.
+#### 🔑 Authentication & TLS
+- `ENABLE_PROXY_AUTH=true`: (Server) Require username/password for proxy users.
+- `PROXY_AUTH_USERNAME=admin`: (Server) Username for proxy authentication.
+- `PROXY_AUTH_PASSWORD`: (Server) Password for proxy authentication.
+- `ENABLE_TLS_PROXY=false`: (Server) Wraps the proxy in native TLS (HTTPS Proxy).
+- `TLS_CERT_PATH`: Path to the TLS certificate file (`.pem`).
+- `TLS_KEY_PATH`: Path to the TLS private key file (`.pem`).
+
+#### 🔒 Tunnel Encryption (AES-256-GCM)
+- `ENABLE_ENCRYPTION=true`: Enables native AES-256-GCM streaming encryption.
+- `ENCRYPTION_SECRET`: Master password for the AES tunnel cipher.
+
+#### 🚀 Performance & Flow Control
+- `ENABLE_MAX_CONNECTIONS=true`: Enforces hard caps on concurrent streams.
+- `MAX_CONNECTIONS=2000`: Max parallel streams allowed in the tunnel.
+- `MAX_CONCURRENT_PROXY_CONNECTIONS=500`: (Server) Max simultaneous proxy clients.
+- `WS_HIGH_WATER_MARK_MB=64`: Buffer threshold to pause data (Backpressure).
+- `WS_LOW_WATER_MARK_MB=16`: Buffer threshold to resume data (Backpressure).
+- `MAX_TUNNEL_QUEUE_MB=100`: (Server) Max buffered payload in the tunnel queue.
+- `MAX_CLIENT_QUEUE_MB=100`: (Client) Max buffered payload for local streams.
 
 #### 🛡️ Memory & OOM Protection
 - `MAX_FRAME_SIZE=10485760`: Max allowed size (10MB) for a single multiplexed frame.
-- `MAX_ENCODE_FRAME_SIZE_MB=50`: Safety limit for encoding outbound frame payloads.
-- `MAX_SOCKET_BUFFER_MB=10`: Individual socket buffer limit before termination.
-- `MAX_PROXY_HEADER_SIZE=8192`: (Server-only) Max HTTP header size for proxy clients.
-- `MAX_PROXY_TIMEOUT_MS=10000`: (Server-only) Timeout for receiving initial proxy headers.
-- `IDLE_TIMEOUT_MS=60000`: Timeout for connections that stay idle without data.
-- `MAX_HOSTNAME_SIZE=2048`: (Client-only) Max length for target hostnames in OPEN frames.
-- `MAX_PENDING_CONNECTIONS=1000`: (Client-only) Limit for connections waiting for DNS or early-data.
+- `MAX_ENCODE_FRAME_SIZE_MB=50`: Limit for encoding outbound frame payloads.
+- `MAX_SOCKET_BUFFER_MB=10`: Per-socket write buffer limit before termination.
+- `MAX_PROXY_HEADER_SIZE=8192`: (Server) Max HTTP header size for proxy clients.
+- `MAX_PROXY_TIMEOUT_MS=10000`: (Server) Timeout for initial proxy headers.
+- `IDLE_TIMEOUT_MS=60000`: Timeout for connections with no data exchange.
+- `MAX_HOSTNAME_SIZE=2048`: (Client) Max hostname length allowed in OPEN frames.
+- `MAX_PENDING_CONNECTIONS=1000`: (Client) Limit for target DNS/early-data buffering.
 
-#### 🛠️ Routing Behavior
-- `FORCE_CONNECTION_CLOSE=false`: (Server-only) Forces `Connection: close` globally when explicitly enabled.
-- `SMART_HTTP_CLOSE=true`: (Server-only) Smart default policy: keep-alive for simple safe methods, force close or reject invalid/risky HTTP framing.
-- `STRICT_HTTP_FRAMING=true`: (Server-only) Rejects malformed/ambiguous HTTP framing patterns before forwarding.
-- `REWRITE_PROXY_URLS=true`: (Server-only) Normalizes absolute proxy URLs to paths.
-- `IPV4_FALLBACK_TIMEOUT_MS=250`: (Client-only) Wait time (in ms) before falling back from a dead IPv6 route to IPv4 (Happy Eyeballs).
+#### 🛠️ Routing & Debugging
+- `FORCE_CONNECTION_CLOSE=false`: (Server) Forces `Connection: close` globally.
+- `SMART_HTTP_CLOSE=true`: (Server) Hardens risky HTTP framing cases automatically.
+- `STRICT_HTTP_FRAMING=true`: (Server) Rejects malformed/ambiguous HTTP framing.
+- `REWRITE_PROXY_URLS=true`: (Server) Normalizes absolute proxy URLs.
+- `ENABLE_TRACING=false`: Enables verbose internal trace logging to `trace.log`.
+- `SKIP_DOTENV=false`: Disables automatic `.env` loading (useful for testing).
+- `DEBUG_START_ID=1`: (Optional) Forces the start value for Connection IDs.
 
 ### Recommended Security/Performance Profiles
 

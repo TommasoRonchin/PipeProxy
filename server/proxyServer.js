@@ -440,7 +440,7 @@ const proxyConnectionHandler = (socket) => {
                 return !HOP_BY_HOP_HEADERS.has(name);
             });
 
-            const safeHeader = filteredLines.join('\r\n') + '\r\nConnection: close\r\n\r\n';
+            const safeHeader = filteredLines.join('\r\n') + (forceCloseThisRequest ? '\r\nConnection: close\r\n\r\n' : '\r\n\r\n');
             const packet = Buffer.concat([Buffer.from(safeHeader, 'utf8'), extraData]);
             tunnelServer.sendFrame(TYPES.DATA, connId, packet);
         }

@@ -72,7 +72,7 @@ class FrameProtocol extends EventEmitter {
             }
         } else if (type === TYPES.CLOSE) {
             this.emit('close', connectionId); // EMIT FIRST so proxyServer catches it
-            socket.end(); // USE end() instead of destroy() to allow transmit buffers to drain (fixes ERR_CONTENT_LENGTH_MISMATCH)
+            socket.destroy(); // FORCE DESTROY INSTEAD OF END TO PREVENT FD EXHAUSTION (TIME_WAIT)
             this.connections.delete(connectionId);
         } else if (type === TYPES.OPEN_ACK) {
             this.emit('open_ack', connectionId);

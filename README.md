@@ -51,7 +51,26 @@ cd PipeProxy
 npm install
 ```
 
-### Run with npm / npx CLI
+### Install from npm Registry
+
+PipeProxy is published on npm as the package `pipeproxy`:
+
+- https://www.npmjs.com/package/pipeproxy
+
+You can run it directly without cloning the repository:
+
+```bash
+# Run directly with npx
+npx pipeproxy server
+npx pipeproxy client
+
+# Or install globally
+npm install -g pipeproxy
+pipeproxy server
+pipeproxy client
+```
+
+## 💻 CLI Usage
 
 After installation, you can start either node with npm scripts or with the CLI binary exposed by the package.
 
@@ -67,6 +86,9 @@ npx pipeproxy client
 # Optional direct binaries
 npx pipeproxy-server
 npx pipeproxy-client
+
+# Show built-in CLI help
+npx pipeproxy --help
 ```
 
 You can also override environment variables directly from CLI flags:
@@ -445,3 +467,7 @@ For internet-facing deployments, treat this as one layer in defense-in-depth and
 - `ENABLE_TLS_PROXY=true` (or TLS terminated by a trusted reverse proxy)
 - `ENABLE_SECURE_HANDSHAKE=true`
 - Restrictive network exposure (firewall/IP allowlist where possible)
+
+---
+
+Made by Tommaso Ronchin (tommasoronchin.it)

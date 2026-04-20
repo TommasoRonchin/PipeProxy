@@ -3,12 +3,29 @@
   "version": "1.0.0",
   "description": "A high-performance, production-grade distributed HTTP/HTTPS Proxy system with AES-256-GCM encrypted multiplexed tunnels.",
   "main": "server/proxyServer.js",
+  "bin": {
+    "pipeproxy": "bin/pipeproxy.js",
+    "pipeproxy-server": "bin/pipeproxy-server.js",
+    "pipeproxy-client": "bin/pipeproxy-client.js"
+  },
+  "files": [
+    "bin",
+    "client",
+    "server",
+    "shared",
+    "README.md",
+    "LICENSE",
+    ".env.server.example",
+    ".env.client.example"
+  ],
   "scripts": {
+    "start": "pipeproxy server",
     "test:comprehensive": "node tests/test_comprehensive.js",
     "test:suspicious": "node tests/test_suspicious_patterns.js",
     "test": "npm run test:comprehensive && npm run test:suspicious",
     "server": "node server/proxyServer.js",
-    "client": "node client/raspberryClient.js"
+    "client": "node client/raspberryClient.js",
+    "cli": "node bin/pipeproxy.js"
   },
   "repository": {
     "type": "git",

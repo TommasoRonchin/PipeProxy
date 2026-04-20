@@ -51,6 +51,52 @@ cd PipeProxy
 npm install
 ```
 
+### Run with npm / npx CLI
+
+After installation, you can start either node with npm scripts or with the CLI binary exposed by the package.
+
+```bash
+# From a local clone
+npm run server
+npm run client
+
+# Equivalent local CLI usage
+npx pipeproxy server
+npx pipeproxy client
+
+# Optional direct binaries
+npx pipeproxy-server
+npx pipeproxy-client
+```
+
+You can also override environment variables directly from CLI flags:
+
+```bash
+# Server
+npx pipeproxy server -p 3128 -t 8080 -s my_tunnel_secret --proxy-auth --proxy-user admin --proxy-pass strongpass
+
+# Client
+npx pipeproxy client -u ws://YOUR_VPS_IP:8080 -s my_tunnel_secret --secure-handshake
+
+# Generic env override (works for any variable)
+npx pipeproxy server --env MAX_PROXY_TIMEOUT_MS=15000 --env MAX_CONCURRENT_PROXY_CONNECTIONS=800
+```
+
+If you install it globally:
+
+```bash
+npm install -g pipeproxy
+pipeproxy server
+pipeproxy client
+```
+
+If you want to execute directly from npm registry without cloning (after publishing), run:
+
+```bash
+npx pipeproxy server
+npx pipeproxy client
+```
+
 ---
 
 ---

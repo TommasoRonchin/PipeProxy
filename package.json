@@ -1,6 +1,6 @@
 {
   "name": "pipeproxy",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "A high-performance, production-grade distributed HTTP/HTTPS Proxy system with AES-256-GCM encrypted multiplexed tunnels.",
   "main": "server/proxyServer.js",
   "bin": {

@@ -470,4 +470,6 @@ For internet-facing deployments, treat this as one layer in defense-in-depth and
 
 ---
 
-Made by Tommaso Ronchin (tommasoronchin.it)
+Made by [Tommaso Ronchin](https://tommasoronchin.it)
+
+You can find additional PipeProxy information at [pipeproxy.tommasoronchin.it](https://pipeproxy.tommasoronchin.it/).
